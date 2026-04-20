@@ -1,0 +1,14 @@
+{
+    "modem_port_rule": {
+        "usb": {
+            "8087:095a": {
+                "name": "l850-gl",
+                "mode": "ncm",
+                "option_driver": 1,
+                "include": [
+                    "1.0"
+                ]
+            }
+        }
+    }
+}

@@ -1,0 +1,20 @@
+# Build artifacts
+*.ipk
+*.apk
+bin/
+build_dir/
+staging_dir/
+tmp/
+logs/
+
+# SDK cache
+sdk/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

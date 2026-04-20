@@ -1,0 +1,254 @@
+name: "Build L850GL packages"
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '*'
+    tags:
+      - 'v*'
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "README*.md"
+      - ".github/workflows/**"
+      - ".github/**"
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  job_auto_tag:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      new_tag: ${{ steps.create_tag.outputs.tag_name }}
+      tag_created: ${{ steps.create_tag.outputs.tag_created }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Check if version.mk changed
+      id: check_version_change
+      run: |
+        if git diff --name-only HEAD~1 HEAD | grep -q "^version\.mk$"; then
+          echo "version_changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "version_changed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Extract version from version.mk
+      id: extract_version
+      if: steps.check_version_change.outputs.version_changed == 'true'
+      run: |
+        version=$(grep "^QMODEM_VERSION" version.mk | sed 's/QMODEM_VERSION:=//' | xargs)
+        if [ -z "$version" ]; then
+          echo "Error: Could not extract version from version.mk"
+          exit 1
+        fi
+        echo "version=$version" >> $GITHUB_OUTPUT
+        echo "tag_name=v$version" >> $GITHUB_OUTPUT
+
+    - name: Check if tag already exists
+      id: check_tag
+      if: steps.check_version_change.outputs.version_changed == 'true'
+      run: |
+        tag_name="${{ steps.extract_version.outputs.tag_name }}"
+        if git tag -l | grep -q "^${tag_name}$"; then
+          echo "tag_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "tag_exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create and push tag
+      id: create_tag
+      if: steps.check_version_change.outputs.version_changed == 'true' && steps.check_tag.outputs.tag_exists == 'false'
+      run: |
+        tag_name="${{ steps.extract_version.outputs.tag_name }}"
+        version="${{ steps.extract_version.outputs.version }}"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "$tag_name" -m "Release version $version"
+        git push origin "$tag_name"
+        echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
+        echo "tag_created=true" >> $GITHUB_OUTPUT
+
+  job_prepare:
+    runs-on: ubuntu-latest
+    needs: [job_auto_tag]
+    if: always()
+    outputs:
+      branch_name: ${{ steps.determine_push.outputs.branch_name }}
+      tag_name: ${{ steps.determine_push.outputs.tag_name }}
+      push_type: ${{ steps.determine_push.outputs.push_type }}
+      is_pr: ${{ steps.determine_push.outputs.is_pr }}
+
+    steps:
+      - name: Determine push type
+        id: determine_push
+        run: |
+          if [[ "${{ needs.job_auto_tag.outputs.tag_created }}" == "true" ]]; then
+            echo "tag_name=${{ needs.job_auto_tag.outputs.new_tag }}" >> $GITHUB_OUTPUT
+            echo "push_type=tag" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag_name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "push_type=tag" >> $GITHUB_OUTPUT
+          else
+            echo "branch_name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "push_type=branch" >> $GITHUB_OUTPUT
+          fi
+          is_pr=$([[ "${{ github.event_name }}" == "pull_request" ]] && echo 1 || echo 0)
+          echo "is_pr=${is_pr}" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          path: 'qmodem'
+
+      - name: Generate Release Note
+        run: |
+          cd qmodem
+          python3 ./scripts/update_support_list.py temp_support_list \
+            ./application/qmodem/files/usr/share/qmodem/modem_support.json
+          mv temp_support_list_release_notes.md ./release_note.md
+
+      - name: Upload Release Note
+        uses: actions/upload-artifact@v4
+        with:
+          name: Release Note
+          path: ./qmodem/release_note.md
+
+  job_build_l850gl:
+    name: Build (${{ matrix.build_arch }})
+    needs: [job_prepare]
+    continue-on-error: true
+    strategy:
+      matrix:
+        build_arch: ['aarch64_generic_ipk', 'armv7_ipk']
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install packages
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install zstd build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+            python3-venv rsync unzip zlib1g-dev file wget
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          path: 'qmodem'
+
+      - name: Import Env
+        run: cat qmodem/.github/workflows/${{ matrix.build_arch }}.env >> "$GITHUB_ENV"
+
+      - name: Cache openwrt SDK
+        id: cache-sdk
+        uses: actions/cache@v3
+        with:
+          path: sdk
+          key: openwrt-sdk-${{ matrix.build_arch }}-24.10-v3
+
+      - name: Initialization environment
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        env:
+          url_sdk: ${{ env.SDK_URL }}${{ env.SDK_NAME}}.${{ env.SDK_EXT }}
+        run: |
+          wget ${{ env.url_sdk }}
+          file_name=${{ env.SDK_NAME}}.${{ env.SDK_EXT }}
+          if [ "${{ env.SDK_EXT }}" == "tar.zst" ]; then
+            mkdir sdk && tar --zstd -xvf $file_name -C ./sdk --strip-components=1
+          elif [ "${{ env.SDK_EXT }}" == "tar.xz" ]; then
+            mkdir sdk && tar -xvf $file_name -C ./sdk --strip-components=1
+          fi
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          cd ..
+          echo "src-link qmodem `pwd`/qmodem" >> sdk/feeds.conf
+          cd sdk
+          ./scripts/feeds update qmodem
+          ./scripts/feeds install -a -p qmodem
+          echo "CONFIG_ALL_NONSHARED=n" > .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_AUTOREMOVE=n" >> .config
+          echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
+          cat ../qmodem/.github/workflows/openwrt_package.config >> .config
+          make defconfig
+          make clean
+          make download -j$(nproc) || true
+
+      - name: Compile L850GL packages
+        id: compile
+        run: |
+          cd sdk
+          ./scripts/feeds update qmodem
+          ./scripts/feeds install -a -p qmodem
+          generic_package=$(cat ../qmodem/.github/workflows/qmodem_package_generic)
+          arch_package=$(cat ../qmodem/.github/workflows/qmodem_package_arch)
+          for package in $generic_package; do
+            make package/$package/compile -j$(nproc) || true
+          done
+          for package in $arch_package; do
+            make package/$package/compile -j$(nproc) || true
+          done
+          ls bin/packages/${{ env.SDK_ARCH }}/qmodem/
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "FIRMWARE=$(pwd)/bin/packages/${{ env.SDK_ARCH }}/qmodem/" >> $GITHUB_ENV
+
+      - name: Upload packages
+        if: ${{ steps.compile.outputs.status == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: L850GL-${{ matrix.build_arch }}
+          path: ${{ env.FIRMWARE }}*
+          retention-days: 7
+
+  job_release_artifacts:
+    name: Release Artifacts
+    needs: [job_build_l850gl, job_prepare]
+    runs-on: ubuntu-latest
+    if: ${{ needs.job_prepare.outputs.push_type == 'tag' }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Download Release Note
+        uses: actions/download-artifact@v4
+        with:
+          name: Release Note
+          path: release_note
+
+      - name: Create releases directory
+        run: mkdir -p releases
+
+      - name: Package artifacts into tar.gz
+        run: |
+          for dir in artifacts/*; do
+            if [ -d "$dir" ]; then
+              base_name=$(basename "$dir")
+              tar -czf "releases/${base_name}.tar.gz" -C "$dir" .
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2.2.2
+        with:
+          body_path: release_note/release_note.md
+          generate_release_notes: true
+          tag_name: ${{ needs.job_prepare.outputs.tag_name }}
+          prerelease: ${{ contains(needs.job_prepare.outputs.tag_name, '-beta') || contains(needs.job_prepare.outputs.tag_name, '-rc') }}
+          files: releases/*

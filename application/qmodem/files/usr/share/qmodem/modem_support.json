@@ -1,0 +1,233 @@
+{
+    "modem_support": {
+        "usb": {
+            "l850-gl": {
+                "id": "8087:095a",
+                "manufacturer_id": "8087",
+                "manufacturer": "fibocom",
+                "platform": "intel",
+                "data_interface": "usb",
+                "pdp_index": "0",
+                "wcdma_band": "1/2/4/5/8",
+                "lte_band": "1/2/3/4/5/7/8/12/13/17/18/19/20/25/26/28/66",
+                "nsa_band": "0",
+                "sa_band": "0",
+                "modes": [
+                    "ncm"
+                ]
+            }
+        },
+        "pcie": {},
+        "device": {
+            "quectel": {
+                "unisoc": {
+                    "vendor_id": [
+                        "2c7c"
+                    ],
+                    "product_id": [
+                        "6001",
+                        "6002",
+                        "6004",
+                        "6005",
+                        "6006",
+                        "6007",
+                        "0900",
+                        "0901",
+                        "0902",
+                        "0903",
+                        "0904"
+                    ]
+                },
+                "qualcomm": {
+                    "vendor_id": [
+                        "2c7c"
+                    ],
+                    "product_id": [
+                        "0121",
+                        "0122",
+                        "0125",
+                        "0133",
+                        "0191",
+                        "0195",
+                        "0296",
+                        "0306",
+                        "030b",
+                        "0435",
+                        "0452",
+                        "0455",
+                        "0512",
+                        "0620",
+                        "0800",
+                        "0801"
+                    ]
+                },
+                "mediatek": {
+                    "vendor_id": [
+                        "2c7c"
+                    ],
+                    "product_id": [
+                        "0700",
+                        "7001",
+                        "7003"
+                    ]
+                }
+            },
+            "fibocom": {
+                "unisoc": {
+                    "vendor_id": [
+                        "2cb7",
+                        "3c93",
+                        "3763"
+                    ],
+                    "product_id": [
+                        "0a04",
+                        "0a05",
+                        "0a06",
+                        "0a07",
+                        "3c93",
+                        "ffff"
+                    ]
+                },
+                "qualcomm": {
+                    "vendor_id": [
+                        "2cb7"
+                    ],
+                    "product_id": [
+                        "0104",
+                        "0105",
+                        "0106",
+                        "0107",
+                        "0108",
+                        "0109",
+                        "010A",
+                        "010B",
+                        "010F",
+                        "0110",
+                        "0111"
+                    ]
+                },
+                "mediatek": {
+                    "vendor_id": [
+                        "0e8d"
+                    ],
+                    "product_id": [
+                        "7126",
+                        "7127"
+                    ]
+                },
+                "intel": {
+                    "vendor_id": [
+                        "8087"
+                    ],
+                    "product_id": [
+                        "095a"
+                    ]
+                }
+            },
+            "meig": {
+                "unisoc": {
+                    "vendor_id": [
+                        "2dee",
+                        "1782"
+                    ],
+                    "product_id": [
+                        "4d50",
+                        "4d51",
+                        "4d52",
+                        "4d53",
+                        "4039",
+                        "4038",
+                        "4040"
+                    ]
+                },
+                "qualcomm": {
+                    "vendor_id": [
+                        "2dee",
+                        "05c6"
+                    ],
+                    "product_id": [
+                        "4d22",
+                        "4d23",
+                        "4d38",
+                        "4d45",
+                        "f601"
+                    ]
+                },
+                "hisilicon": {
+                    "vendor_id": [
+                        "2dee",
+                        "4d20"
+                    ],
+                    "product_id": [
+                        "7126",
+                        "7127"
+                    ]
+                },
+                "asrmicro": {
+                    "vendor_id": [
+                        "2dee"
+                    ],
+                    "product_id": [
+                        "4d57",
+                        "4d58",
+                        "4d59"
+                    ]
+                }
+            },
+            "simcom": {
+                "qualcomm": {
+                    "vendor_id": [
+                        "1a0e",
+                        "1e0e",
+                        "17cb"
+                    ],
+                    "product_id": [
+                        "9001",
+                        "9011",
+                        "0308"
+                    ]
+                }
+            },
+            "foxconn": {
+                "qualcomm": {
+                    "vendor_id": [
+                        "17cb",
+                        "05c6",
+                        "105b",
+                        "413c",
+                        "03f0"
+                    ],
+                    "product_id": [
+                        "0306",
+                        "0308",
+                        "90d5",
+                        "9025",
+                        "e0ab",
+                        "81d7",
+                        "0a6c"
+                    ]
+                }
+            },
+            "neoway": {
+                "unisoc": {
+                    "vendor_id": [
+                        "3763"
+                    ],
+                    "product_id": [
+                        "3c93"
+                    ]
+                }
+            },
+            "telit": {
+                "qualcomm": {
+                    "vendor_id": [
+                        "1bc7"
+                    ],
+                    "product_id": [
+                        "1075"
+                    ]
+                }
+            }
+        }
+    }
+}
