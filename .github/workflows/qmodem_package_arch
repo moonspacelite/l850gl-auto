@@ -1,3 +1,4 @@
 tom_modem
 ubus_at_daemon
 sms_forwarder
+luci-app-qmodem-sms

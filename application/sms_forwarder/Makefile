@@ -39,7 +39,6 @@ endef
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/sms_forwarder $(1)/usr/bin/
-	$(INSTALL_BIN) ./files/usr/bin/sms_forward_*.sh $(1)/usr/bin/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/sms_forwarder $(1)/etc/init.d/
 	$(INSTALL_DIR) $(1)/etc/config
