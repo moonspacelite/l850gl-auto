@@ -568,8 +568,8 @@ get_sinr()
 {
     local sinr
     case $1 in
-        "LTE") sinr=$(awk "BEGIN{ printf \"%.2f\", $2 * 0.5 - 23.5 }" | sed 's/\.*0*$//') ;;
-        "NR")  sinr=$(awk "BEGIN{ printf \"%.2f\", $2 * 0.5 - 23.5 }" | sed 's/\.*0*$//') ;;
+        "LTE") sinr=$(awk -v num="$2" "BEGIN{ printf \"%.2f\", num * 0.5 - 23.5 }" | sed 's/\.*0*$//') ;;
+        "NR")  sinr=$(awk -v num="$2" "BEGIN{ printf \"%.2f\", num * 0.5 - 23.5 }" | sed 's/\.*0*$//') ;;
     esac
     echo "$sinr"
 }

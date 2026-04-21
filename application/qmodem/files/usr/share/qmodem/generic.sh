@@ -97,10 +97,10 @@ add_speed_entry()
     rate=`rate_convert $rate`
     case $type in
         "rx")
-            add_plain_info_entry "Rx Rate" "$rate" "Transmit Rate"
+            add_plain_info_entry "Rx Rate" "$rate" "Receive Rate"
             ;;
         "tx")
-            add_plain_info_entry "Tx Rate" "$rate" "Receive Rate"
+            add_plain_info_entry "Tx Rate" "$rate" "Transmit Rate"
             ;;
         *)
             return

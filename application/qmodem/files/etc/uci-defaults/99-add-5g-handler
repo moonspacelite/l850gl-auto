@@ -30,7 +30,7 @@ modem_settings()
 	alwaylink,m60k63|\
 	feiyan,m60k63)
 		#usb slot 2-1
-		add_usb_slot_cfg "wwan0" "2-1" "wwan0" "" "" "5g-power" "0" "1" "5"\
+		add_usb_slot_cfg "wwan0" "2-1" "wwan0" "" "" "5g-power" "0" "1" "5"
 		#set led script
 		uci set qmodem.wwan0.led_script="m60k63"
 		;;

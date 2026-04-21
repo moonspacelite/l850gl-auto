@@ -74,7 +74,7 @@ unlock_sim()
     pin=$1
     sim_lock_file="/var/run/qmodem/${modem_config}_dir/pincode"
     lock ${sim_lock_file}.lock
-    if [ -f $sim_lock_file ] && [ "$pin" == "$(cat $sim_lock_file)"];then
+    if [ -f $sim_lock_file ] && [ "$pin" == "$(cat $sim_lock_file)" ];then
         m_debug "pin code is already try"
     else
         res=$(at "$at_port" "AT+CPIN=\"$pin\"")
@@ -115,7 +115,7 @@ update_config()
     config_get pdp_index $modem_config pdp_index
     [ -n "$pdp_index" ] && userset_pdp_index="1" || userset_pdp_index="0"
     config_get suggest_pdp_index $modem_config suggest_pdp_index
-    [ -z "$suggest_pdp_index"] && suggest_pdp_index=$(get_platform_suggest_pdp_index)
+    [ -z "$suggest_pdp_index" ] && suggest_pdp_index=$(get_platform_suggest_pdp_index)
     [ -z "$pdp_index" ] && pdp_index=$suggest_pdp_index
     config_get ra_master $modem_config ra_master
     config_get extend_prefix $modem_config extend_prefix
