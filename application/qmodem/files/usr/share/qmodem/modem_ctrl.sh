@@ -243,13 +243,15 @@ case $method in
         cmd=$3
         [ -n "$sms_at_port" ] && at_port=$sms_at_port
         res=$(tom_modem $use_ubus_flag  -d $at_port -o s -p "$cmd")
+        pdu_ret=$?
         json_select result
-        if [ "$?" == 0 ]; then
+        if [ "$pdu_ret" = "0" ]; then
             json_add_string status "1"
             json_add_string cmd "tom_modem $use_ubus_flag  -d $at_port -o s -p \"$cmd\""
             json_add_string "res" "$res"
         else
             json_add_string status "0"
+            json_add_string error "tom_modem failed with exit code $pdu_ret"
         fi
         ;;
     "send_sms")
@@ -258,13 +260,15 @@ case $method in
         message_content=$(echo $cmd_json | jq -r '.message_content')
         [ -n "$sms_at_port" ] && at_port=$sms_at_port
         sms_tool_q -d $at_port send "$phone_number" "$message_content" > /dev/null
+        sms_ret=$?
         json_select result
-        if [ "$?" == 0 ]; then
+        if [ "$sms_ret" = "0" ]; then
             json_add_string status "1"
             json_add_string cmd "sms_tool_q -d $at_port send \"$phone_number\" \"$message_content\""
             json_add_string "cmd_json" "$cmd_json"
         else
             json_add_string status "0"
+            json_add_string error "sms_tool_q failed with exit code $sms_ret"
         fi
         json_close_object
         ;;
