@@ -1,6 +1,5 @@
 #!/bin/sh
 source /lib/functions.sh
-#运行目录
 MODEM_RUNDIR="/var/run/qmodem"
 SCRIPT_DIR="/usr/share/qmodem"
 
@@ -55,7 +54,7 @@ set_led()
             ;;
         net)
             [ -z "$net_led" ] && return
-            cfg_name=$(echo $net_led |tr ":" "_") 
+            cfg_name=$(echo $net_led |tr ":" "_")
             uci batch << EOF
 set system.n${cfg_name}=led
 set system.n${cfg_name}.name=${modem_slot}_net_indicator
@@ -65,7 +64,6 @@ set system.n${cfg_name}.dev=${modem_netcard}
 set system.n${cfg_name}.mode="link tx rx"
 commit system
 EOF
-
             /etc/init.d/led restart
             ;;
     esac
@@ -79,7 +77,6 @@ unlock_sim()
     if [ -f $sim_lock_file ] && [ "$pin" == "$(cat $sim_lock_file)"];then
         m_debug "pin code is already try"
     else
-        
         res=$(at "$at_port" "AT+CPIN=\"$pin\"")
         case "$?" in
             0)
@@ -92,39 +89,12 @@ unlock_sim()
         esac
     fi
     lock -u ${sim_lock_file}.lock
-
 }
 
+# L850-GL (Fibocom intel platform): pdp_index always 0
 get_platform_suggest_pdp_index()
 {
-    case $manufacturer in
-    quectel)
-        case $platform in
-            lte)
-                echo 3
-                ;;
-            *)
-                echo 1
-                ;;
-        esac
-    ;;
-    fibocom)
-        case $platform in
-            mediatek)
-                echo 3
-                ;;
-            intel)
-                echo 0
-                ;;
-            *)
-                echo 1
-                ;;
-        esac
-    ;;
-    *)
-        echo 1
-        ;;
-    esac
+    echo 0
 }
 
 update_config()
@@ -152,10 +122,8 @@ update_config()
     config_get en_bridge $modem_config en_bridge
     config_get do_not_add_dns $modem_config do_not_add_dns
     config_get dns_list $modem_config dns_list
-    config_get huawei_dial_mode $modem_config huawei_dial_mode
     config_get donot_nat $modem_config donot_nat 0
     config_get global_dial main enable_dial
-    # config_get ethernet_5g u$modem_config ethernet 转往口获取命令更新，待测试
     config_foreach get_associate_ethernet_by_path modem-slot
     modem_slot=$(basename $modem_path)
     config_get alias $modem_config alias
@@ -205,15 +173,6 @@ check_dial_prepare()
 {
     cpin=$(at "$at_port" "AT+CPIN?")
     get_sim_status "$cpin"
-    [ "$manufacturer" = "neoway" ] && {
-        local res
-        res=$(at $at_port 'AT+SIMCROSS=1,1;$MYCCID' | grep -q "ERROR")
-        if [ $? -ne 0 ]; then
-            sim_state_code="1"
-        else
-            sim_state_code="0"
-        fi
-    }
     case $sim_state_code in
         "0")
             m_debug "info sim card is miss"
@@ -230,7 +189,7 @@ check_dial_prepare()
             m_debug "info sim card state is $sim_state_code"
             ;;
     esac
-    
+
     if [ "$sim_fullfill" = "1" ];then
         set_led "sim" $modem_config 255
     else
@@ -253,77 +212,19 @@ check_dial_prepare()
     fi
 }
 
+# L850-GL: check IP via AT+CGPADDR (Intel XMM platform)
 check_ip()
 {
-    # Intel XMM (L850-GL): parse AT+CGPADDR field 2 (IPv4 only)
-    if [ "$manufacturer" = "fibocom" ] && [ "$platform" = "intel" ]; then
-        local resp=$(at "$at_port" "AT+CGPADDR=$pdp_index" 2>/dev/null | grep "+CGPADDR:")
-        local intel_ip=$(echo "$resp" | awk -F'"' '{print $2}')
-        intel_ip=$(echo "$intel_ip" | tr -d "\n\r")
-        if [ -n "$intel_ip" ] && [ "$intel_ip" != "0.0.0.0" ]; then
-            ipv4="$intel_ip"
-            connection_status=1
-        else
-            ipv4=""
-            connection_status=0
-        fi
-        return
+    local resp=$(at "$at_port" "AT+CGPADDR=$pdp_index" 2>/dev/null | grep "+CGPADDR:")
+    local intel_ip=$(echo "$resp" | awk -F'"' '{print $2}')
+    intel_ip=$(echo "$intel_ip" | tr -d "\n\r")
+    if [ -n "$intel_ip" ] && [ "$intel_ip" != "0.0.0.0" ]; then
+        ipv4="$intel_ip"
+        connection_status=1
+    else
+        ipv4=""
+        connection_status=0
     fi
-    case $manufacturer in
-            "simcom")
-                case $platform in
-                    "qualcomm")
-                        check_ip_command="AT+CGPADDR=6"
-                        ;;
-                esac
-                ;;
-            "neoway")
-                case $platform in
-                    "unisoc")
-                        check_ip_command="AT+CGPADDR=1"
-                        ;;
-                esac
-                ;;
-            *)
-                check_ip_command="AT+CGPADDR=$pdp_index"
-                ;;
-        esac
-
-        if [ "$driver" = "mtk_pcie" ]; then
-            mbim_port=$(echo "$at_port" | sed 's/at/mbim/g')
-            local config=$(umbim -d $mbim_port config)
-            ipaddr=$(echo "$config" | grep "ipv4address:" | awk '{print $2}' | cut -d'/' -f1)
-            ipaddr="$ipaddr $(echo "$config" | grep "ipv6address:" | awk '{print $2}' | cut -d'/' -f1)"
-        else
-            ipaddr=$(at "$at_port" "$check_ip_command" | grep +CGPADDR:)
-        fi
-
-        if [ -n "$ipaddr" ];then
-            ipv6=$(echo $ipaddr | grep -oE "\b([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b")
-            ipv4=$(echo $ipaddr | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b")
-            if [ "$manufacturer" = "simcom" ];then
-                ipv4=$(echo $ipaddr | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | grep -v "0\.0\.0\.0" | head -n 1)
-                ipv6=$(echo $ipaddr | grep -oE "\b([0-9a-fA-F]{0,4}.){2,7}[0-9a-fA-F]{0,4}\b")
-            fi
-            # disallow_ipv4="0.0.0.0"
-            # #remove the disallow ip
-            # if [[ "$ipv4" == *"$disallow_ipv4"* ]];then
-            #     ipv4=""
-            # fi
-            connection_status=0
-            if [ -n "$ipv4" ];then
-                connection_status=1
-            fi
-            if [ -n "$ipv6" ];then
-                connection_status=2
-            fi
-            if [ -n "$ipv4" ] && [ -n "$ipv6" ];then
-                connection_status=3
-            fi
-        else
-            connection_status="-1"
-            m_debug "at port response unexpected $ipaddr"
-        fi
 }
 
 append_to_fw_zone()
@@ -356,35 +257,9 @@ set_if()
     fw_reload_flag=0
     dhcp_reload_flag=0
     network_reload_flag=0
-    #check if exist
-    proto="dhcp"
+    # L850-GL intel: always static proto
+    proto="static"
     protov6="dhcpv6"
-    case $manufacturer in
-        "quectel")
-            case $platform in
-                "unisoc")
-                    case $driver in
-                        "mbim")
-                            proto="none"
-                            protov6="none"
-                            ;;
-                        esac
-                    ;;
-            esac
-            ;; 
-        "fibocom")
-            case $platform in
-                "mediatek")
-                    proto="static"
-                    protov6="dhcpv6"
-                    ;;
-                "intel")
-                    proto="static"
-                    protov6="dhcpv6"
-                    ;;
-                esac
-            ;;
-    esac
     pdp_type_lower=$(echo $pdp_type | tr 'A-Z' 'a-z')
     case $pdp_type_lower in
         "ip")
@@ -436,15 +311,12 @@ set_if()
     fi
     if [ "$env6" -eq 1 ];then
         if [ -z "$interfacev6" ];then
-            # uci set network.lan.ipv6='1' # user decide themself whether to enable IPv6 on LAN.
-            # uci set network.lan.ip6assign='64'
             uci set network.${interface6_name}='interface'
             uci set network.${interface6_name}.modem_config="${modem_config}"
             uci set network.${interface6_name}.proto="${protov6}"
             uci set network.${interface6_name}.ifname="@${interface_name}"
             uci set network.${interface6_name}.device="@${interface_name}"
             uci set network.${interface6_name}.metric="${metric}"
-            
             local wwan6_num=$(uci -q get firewall.@zone[$num].network | grep -w "${interface6_name}" | wc -l)
             if [ "$wwan6_num" = "0" ]; then
                 append_to_fw_zone $num ${interface6_name}
@@ -489,7 +361,7 @@ set_if()
             m_debug "delete interface $interface6_name"
         fi
     fi
-    
+
     if [ "$network_reload_flag" -eq 1 ];then
         uci commit network
         ifup ${interface_name}
@@ -507,16 +379,10 @@ set_if()
         m_debug "dhcp reload"
     fi
 
-
     set_modem_netcard=$modem_netcard
     if [ -z "$set_modem_netcard" ];then
         m_debug "no netcard found"
     fi
-    ethernet_check=$(handle_5gethernet)
-    if [ -n "$ethernet_check" ] && [ -n "/sys/class/net/$ethernet_5g" ] && [ -n "$ethernet_5g" ];then
-        set_modem_netcard=$ethernet_5g
-    fi
-    #set led
     set_led "net" $modem_config $set_modem_netcard
     origin_netcard=$(uci -q get network.$interface_name.ifname)
     origin_device=$(uci -q get network.$interface_name.device)
@@ -544,14 +410,6 @@ set_if()
 
 flush_if()
 {
-    # uci delete network.${interface_name}
-    # uci delete network.${interface6_name}
-    # uci delete dhcp.${interface6_name}
-    # uci commit network
-    # uci commit dhcp
-    # set_led "net" $modem_config
-    # set_led "sim" $modem_config 0
-    # m_debug "delete interface $interface_name"
     config_load network
     remove_target="$modem_config"
     config_foreach flush_ip_cb "interface"
@@ -570,7 +428,6 @@ flush_ip_cb()
     if [ "$remove_target" = "$bind_modem_config" ];then
         uci delete network.$network_cfg
     fi
-    
 }
 
 dial(){
@@ -586,208 +443,38 @@ dial(){
     m_debug "dialing $modem_path driver $driver"
     exec_pre_dial $modem_config
     case $driver in
-        "qmi")
-            qmi_dial
-            ;;
-        "mbim")
-            mbim_dial
-            ;;
-        "mhi")
-            mhi_dial
-            ;;
-        "ncm")
-            at_dial_monitor
-            ;;
-        "ecm")
-            at_dial_monitor
-            ;;
-        "rndis")
-            at_dial_monitor
-            ;;
-        "mtk_pcie")
+        "ncm"|"mbim")
             at_dial_monitor
             ;;
         *)
-            mbim_dial
+            at_dial_monitor
             ;;
     esac
-}
-
-wwan_hang()
-{
-    pid=$(cat "${MODEM_RUNDIR}/${modem_config}_dir/$modem_config.pid")
-    m_debug "wwan_hang, pid = $pid"
-    if [ -n $pid ]; then
-        kill $pid
-    fi
 }
 
 ecm_hang()
 {
     m_debug "ecm_hang"
-    auto_dial_hang_fail=0
-    auto_dial_hang
-    auto_dial_hang_fail=$?
-    if [ $auto_dial_hang_fail -eq 0 ]; then
-        return
-    fi
-    case "$manufacturer" in
-        "quectel")
-            at_command="AT+QNETDEVCTL=$pdp_index,2,1"
-            ;;
-        "fibocom")
-            case "$platform" in
-                "mediatek")
-                    at_command="AT+CGACT=0,$pdp_index"
-                    ;;
-                "intel")
-                    at "${at_port}" "AT+XDATACHANNEL=0"
-                    at_command="AT+CGDATA=0"
-                    ;;
-                *)
-                    at_command="AT+GTRNDIS=0,$pdp_index"
-                    ;;
-            esac
-            ;;
-        "meig")
-            at_command='AT$QCRMCALL=0,0,3,2,'$pdp_index
-            ;;
-        "huawei")
-            at_command="AT^NDISDUP=0,0"
-            ;;
-        "neoway")
-            delay=3
-            at_command='AT$MYUSBNETACT=0,0'
-            ;;
-        "gosuncn")
-            at_command="AT+ZECMCALL=0"
-            ;;
-        *)
-            at_command="ATI"
-            ;;
-    esac
-    at "${at_port}" "${at_command}"
-    [ -n "$delay" ] && sleep "$delay"
+    # L850-GL intel NCM hang sequence
+    at "${at_port}" "AT+XDATACHANNEL=0"
+    at "${at_port}" "AT+CGDATA=0"
 }
-
-auto_dial_stop(){
-    m_debug "stop auto dial"
-    case "$manufacturer" in
-        "huawei")
-        case "$platform" in
-            "unisoc")
-            ;;
-        esac
-        ;;
-    esac
-}
-
 
 hang()
 {
     m_debug "hang up $modem_path driver $driver"
     case $driver in
-        "ncm")
+        "ncm"|"mbim")
             ecm_hang
             ;;
-        "ecm")
+        *)
             ecm_hang
-            ;;
-        "rndis")
-            ecm_hang
-            ;;
-        "qmi")
-            wwan_hang
-            ;;
-        "mbim")
-            wwan_hang
-            ;;
-        "mhi")
-            wwan_hang
             ;;
     esac
     flush_if
 }
 
-mbim_dial(){
-    if [ -z "$apn" ];then
-        apn="auto"
-    fi
-    qmi_dial
-}
-
-mhi_dial()
-{
-    qmi_dial
-}
-
-qmi_dial()
-{
-    cmd_line="quectel-CM"
-    [ -e "/usr/bin/quectel-CM-M" ] && cmd_line="quectel-CM-M" && tom_modified=1
-    case $pdp_type in
-        "ip") cmd_line="$cmd_line -4" ;;
-        "ipv6") cmd_line="$cmd_line -6" ;;
-        "ipv4v6") cmd_line="$cmd_line -4 -6" ;;
-        *) cmd_line="$cmd_line -4 -6" ;;
-    esac
-
-    if [ "$network_bridge" = "1" ]; then
-        cmd_line="$cmd_line -b"
-    fi
-    if [ -n "$pdp_index" ] && [ "$userset_pdp_index" = "1" ]; then
-        cmd_line="$cmd_line -n $pdp_index"
-    fi
-    if [ "$manufacturer" = "telit" ] && [ "$force_set_apn" != "1" ];then
-        m_debug 'please use force apn set for telit modem'
-    fi
-    if [ -n "$apn" ]; then
-        cmd_line="$cmd_line -s $apn"
-    fi
-    if [ -n "$username" ]; then
-        cmd_line="$cmd_line $username"
-    fi
-    if [ -n "$password" ]; then
-        cmd_line="$cmd_line $password"
-    fi
-    if [ "$auth" != "none" ]; then
-        cmd_line="$cmd_line $auth"
-    fi
-    if [ -n "$modem_netcard" ]; then
-    qmi_if=$modem_netcard
-    #if is wwan* ,use the first part of the name
-    if  [[ "$modem_netcard" = "wwan"* ]];then
-        qmi_if=$(echo "$modem_netcard" | cut -d_ -f1)
-    fi
-    #if is rmnet* ,use the first part of the name
-    if [[ "$modem_netcard" = "rmnet"* ]];then
-        qmi_if=$(echo "$modem_netcard" | cut -d. -f1)
-    fi
-        cmd_line="${cmd_line} -i ${qmi_if}"
-    fi
-    if [ "$en_bridge" = "1" ];then
-        cmd_line="${cmd_line} -b"
-    fi
-    if [ "$do_not_add_dns" = "1" ];then
-        cmd_line="${cmd_line} -D"
-    fi
-    if [ -e "/usr/bin/quectel-CM-M" ];then
-        [ -n "$metric" ] && cmd_line="$cmd_line -d -M $metric"
-        [ "$force_set_apn" == "1" ] && cmd_line="$cmd_line -F"
-    else
-        [ -n "$metric" ] && cmd_line="$cmd_line"
-    fi
-    cmd_line="$cmd_line -f $log_file"
-    while true; do
-        m_debug "dialing: $cmd_line"
-        $cmd_line &
-        echo "$!" > "${MODEM_RUNDIR}/${modem_config}_dir/$modem_config.pid"
-        m_debug "pid: $!"
-        wait
-        m_debug "quectel-CM exited, retrying dial"
-    done
-}
-
+# L850-GL AT dial (Intel XMM platform, NCM + MBIM)
 at_dial()
 {
     if [ -z "$pdp_type" ];then
@@ -797,270 +484,47 @@ at_dial()
     local at_command='AT+COPS=0,0'
     tmp=$(at "${at_port}" "${at_command}")
     pdp_type=$(echo $pdp_type | tr 'a-z' 'A-Z')
-    case $manufacturer in
-        "quectel")
-            [ "$donot_nat" = "1" ] && nat_cfg="AT+QCFG=\"nat\",0" || nat_cfg="AT+QCFG=\"nat\",1"
-            case $platform in
-                "hisilicon")
-                    at_command="AT+QNETDEVCTL=1,1,1"
-                    cgdcont_command=""
-                    ;;
 
-                "unisoc")
-                    at_command="AT+QNETDEVCTL=1,$pdp_index,1" # +QNETDEVCTL: <cid>,<op>,<state> 
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    ;;
-                *)
-                    at_command="AT+QNETDEVCTL=3,$pdp_index,1" #LTE Standard AT+QNETDEVCTL=<connect_type>[,<CID>[,<URC_switch>]] 
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    ;;
-            esac
-            ;;
-        "fibocom")
-            case $platform in
-                "mediatek")
-                    # delay=3
-                    # [ "$apn" = "auto" ] || [ -z "$apn" ] && apn="cbnet"
-                    if [ "$pdp_index" = "3" ];then
-                        delay=3
-                        [ "$apn" = "auto" ] || [ -z "$apn" ] && apn="cbnet"
-                        m_debug "Due to a historical issue (https://github.com/FUjr/QModem/issues/179#issuecomment-3968653343), the fm350 pdp_index was incorrectly set to 3, which caused dialing to work but remain unstable. In version 2026.2.27, we have fixed this issue."
-                        m_debug "To avoid unexpectedly removing legacy configuration files, we applied additional handling to ensure consistent behavior with previous versions. However, if you see this message, please manually set the pdp_index to 0. We apologize for any inconvenience caused."
-                    fi
-                    at_command="AT+CGACT=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\",\"$apn\""
-                    ;;
-                "lte")
-                    at_command="AT+GTRNDIS=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    if [ -n "$auth" ]; then
-                        case $auth in
-                            "pap") 
-                                auth_num=1 ;;
-                            "chap") 
-                                auth_num=2 ;;
-                            "auto"|"both"|"MsChapV2") 
-                                auth_num=3 ;;
-                            *) 
-                                auth_num=0 ;;
-                        esac
-                        if [ -n "$username" ] || [ -n "$password" ] && [ "$auth_num" != "0" ] ; then
-                            ppp_auth_command="AT+MGAUTH=$pdp_index,$auth_num,\"$username\",\"$password\""
-                        fi
-                    fi
-                    ;;
-                "intel")
-                    # Fibocom L850-GL / L860-GL (Intel XMM platform)
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\",\"$apn\""
-                    xdns_command="AT+XDNS=$pdp_index,1;+XDNS=$pdp_index,2"
-                    xdata_command="AT+XDATACHANNEL=1,1,\"/USBCDC/0\",\"/USBHS/NCM/0\",2,0"
-                    at_command="AT+CGDATA=\"M-RAW_IP\",$pdp_index"
-                    if [ -n "$auth" ]; then
-                        case $auth in
-                            "pap")   auth_num=1 ;;
-                            "chap")  auth_num=2 ;;
-                            "auto"|"both"|"MsChapV2") auth_num=3 ;;
-                            *)       auth_num=0 ;;
-                        esac
-                        if [ -n "$username" ] || [ -n "$password" ] && [ "$auth_num" != "0" ]; then
-                            ppp_auth_command="AT+XGAUTH=$pdp_index,$auth_num,\"$username\",\"$password\""
-                        fi
-                    fi
-                    ;;
-                "unisoc")
-                    at_command="AT+GTRNDIS=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    if [ -n "$auth" ]; then
-                        case $auth in
-                            "pap") 
-                                auth_num=1 ;;
-                            "chap") 
-                                auth_num=2 ;;
-                            "auto"|"both"|"MsChapV2") 
-                                auth_num=3 ;;
-                            *) 
-                                auth_num=0 ;;
-                        esac
-                        if [ -n "$username" ] || [ -n "$password" ] && [ "$auth_num" != "0" ] ; then
-                            ppp_auth_command="AT+MGAUTH=$pdp_index,$auth_num,\"$username\",\"$password\""
-                        fi
-                    fi
-            esac
-            ;;
-        "huawei")
-            case $platform in
-                "hisilicon")
-                    at_command="AT^NDISDUP=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    if [ -n "$auth" ]; then
-                        case $auth in
-                            "pap") 
-                                auth_num=1 ;;
-                            "chap") 
-                                auth_num=2 ;;
-                            "auto"|"both"|"MsChapV2") 
-                                auth_num=3 ;;
-                            *) 
-                                auth_num=0 ;;
-                        esac
-                        if [ -n "$username" ] || [ -n "$password" ] && [ "$auth_num" != "0" ] ; then
-                            plmn=$(at ${at_port} "AT+COPS=3,2;+COPS?" | grep "+COPS:" | sed 's/+COPS: //g' | cut -d',' -f3 | sed 's/\"//g' | cut -c1-5 | grep -o  -o '[0-9]\{5\}')
-                            [ -z "$plmn" ] && plmn="00000"
-                            ppp_auth_command="AT^AUTHDATA=$pdp_index,$auth_num,$plmn,\"$username\",\"$password\""
-                        fi
-                    fi
-                    ;;
-            esac
-            ;;
-        "simcom")
-            case $platform in
-                "asrmicro")                    
-                    at_command="AT+CGACT=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    ;;
-                "qualcomm")
-                    local cnmp=$(at ${at_port} "AT+CNMP?" | grep "+CNMP:" | sed 's/+CNMP: //g' | sed 's/\r//g')
-                    at_command="AT+CNMP=$cnmp;+CNWINFO=1"
-                    cgdcont_command="AT+CGDCONT=1,\"$pdp_type\""$apn_append
-                    ;;
-                "lte")
-                    at_command="AT+CGACT=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    ;;
-            esac
-            ;;
-        "meig")
-            case $platform in
-                "qualcomm")
-                    at_command='AT$QCRMCALL=1,0,3,2,'$pdp_index
-                    cgdcont_command="AT+CGDCONT=1,\"$pdp_type\""$apn_append
-                    ;;
-            esac
-            ;;
-        "neoway")
-            case $platform in
-                "unisoc")
-                    at_command='AT$MYUSBNETACT=0,1'
-                    cgdcont_command="AT+CGDCONT=1,\"$pdp_type\""$apn_append
-                    ;;
-            esac
-            ;;
-        "telit")
-            case $platform in
-                "qualcomm")
-                    at_command="AT#ICMAUTOCONN=1,$pdp_index"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    ;;
-            esac
-            ;;
-        "gosuncn")
-            case $platform in
-                "lte")
-                    at_command="AT+ZECMCALL=1"
-                    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\""$apn_append
-                    ;;
-            esac
-            ;;
-    esac
-	m_debug "dialing: vendor:$manufacturer; platform:$platform; driver:$driver; apn:$apn; command:$at_command pdp_index:$pdp_index"
+    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\",\"$apn\""
+    xdns_command="AT+XDNS=$pdp_index,1;+XDNS=$pdp_index,2"
+    xdata_command="AT+XDATACHANNEL=1,1,\"/USBCDC/0\",\"/USBHS/NCM/0\",2,0"
+    at_command="AT+CGDATA=\"M-RAW_IP\",$pdp_index"
+
+    if [ -n "$auth" ]; then
+        case $auth in
+            "pap")   auth_num=1 ;;
+            "chap")  auth_num=2 ;;
+            "auto"|"both"|"MsChapV2") auth_num=3 ;;
+            *)       auth_num=0 ;;
+        esac
+        if [ -n "$username" ] || [ -n "$password" ] && [ "$auth_num" != "0" ]; then
+            ppp_auth_command="AT+XGAUTH=$pdp_index,$auth_num,\"$username\",\"$password\""
+        fi
+    fi
+
+    m_debug "dialing: vendor:$manufacturer; platform:$platform; driver:$driver; apn:$apn; command:$at_command pdp_index:$pdp_index"
     m_debug "dial_cmd: $at_command; cgdcont_cmd: $cgdcont_command; ppp_auth_cmd: $ppp_auth_command"
-	case $driver in
-        "mtk_pcie")
-            mbim_port=$(echo "$at_port" | sed 's/at/mbim/g')
-            [ -n "$apn" ] || apn="auto"
-        	rf_status=$(umbim -d  $mbim_port radio|sed -n 's/.*swradiostate: *//p')
-        	[ "$rf_status" = "off" ] && umbim -d  $mbim_port radio on
-        	umbim -d $mbim_port disconnect
-        	sleep 1
-        	umbim -d $mbim_port connect 0 --apn $apn
-		 	;;
-		*)
-  			at "${at_port}" "${cgdcont_command}"
-            [ -n "$xdns_command" ] && at "${at_port}" "$xdns_command"
-            [ -n "$xdata_command" ] && at "${at_port}" "$xdata_command"
-            [ -n "$ppp_auth_command" ] && at "${at_port}" "$ppp_auth_command"
-            [ -n "$nat_cfg" ] && at "${at_port}" "$nat_cfg"
-        	at "${at_port}" "$at_command"
-		 	;;
-	esac
+
+    at "${at_port}" "${cgdcont_command}"
+    [ -n "$xdns_command" ] && at "${at_port}" "$xdns_command"
+    [ -n "$xdata_command" ] && at "${at_port}" "$xdata_command"
+    [ -n "$ppp_auth_command" ] && at "${at_port}" "$ppp_auth_command"
+
+    # Bug #4 fix: AT+CGDATA on L850GL (Intel XMM) can take up to 15s to respond
+    # with CONNECT. Default tom_modem timeout is 3s which causes at() to return
+    # before modem finishes, making the script think dial failed → do_redial()
+    # fires again → double dial → modem conflict → freeze.
+    # Use tom_modem -t 30 directly to give modem enough time to respond.
+    tom_modem $use_ubus_flag -d "${at_port}" -o a -c "${at_command}" -t 30
 }
 
+# L850-GL does not support auto dial
 at_auto_dial()
 {
-    case $manufacturer in
-        "huawei")
-            case $platform in
-                "unisoc")
-                    huawei_auto_dial_unisoc
-                    return 0
-                    ;;
-            esac
-            ;;
-    esac
     return 1
 }
 
-huawei_auto_dial_unisoc()
-{
-    m_debug "huawei_auto_dial: auto dial(no monitor)"
-    m_debug "huawei_auto_dial: vendor:$manufacturer; platform:$platform; driver:$driver; apn:$apn; command:$at_command; pdp_index:$pdp_index; huawei_dial_mode:$huawei_dial_mode; at_port:$at_port"
-    # dial prepare
-    cgdcont_command="AT+CGDCONT=$pdp_index,\"$pdp_type\",\"$apn\""
-    at "$at_port" "$cgdcont_command"
-    # get current auto dial setting
-    at_command='AT^SETAUTODIAL?'
-    at_res=$(at "$at_port" "$at_command" | grep 'SETAUTO')
-    # return ^SETAUTODAIL:1,x
-    current_setting=${at_res##*:}
-    dial_status=$(echo "$current_setting" | cut -d ',' -f 1)
-    current_dial_mode=$(echo "$current_setting" | cut -d ',' -f 2)
-    m_debug "current dial status: $dial_status, current dial mode: $current_dial_mode"
-    # if dial stat is disabled, or when huawei_dial_mode is not empty and current dial mode is not equal to huawei_dial_mode, enable dial
-    if [ "$dial_status" = "0" ] || [ ! -z "$huawei_dial_mode" ] && [ "$current_dial_mode" != "$huawei_dial_mode" ]; then
-        [ -n "$huawei_dial_mode" ] && dial_mode=",$huawei_dial_mode" || dial_mode=",4"
-        at_command="AT^SETAUTODIAL=1$dial_mode"
-        at "$at_port" "$at_command"
-    fi
-}
-
-auto_dial_hang_huawei_unisoc()
-{
-    m_debug "huawei_auto_hang"
-    at_command='AT^SETAUTODIAL?'
-    current_setting=$(at "$at_port" "$at_command" | grep 'SETAUTO')
-    # return ^SETAUTODAIL:1,x
-    current_setting=${current_setting##*:}
-    dial_status=$(echo "$current_setting" | cut -d ',' -f 1)
-    if [ "$dial_status" = "1" ]; then 
-        at_command="AT^SETAUTODIAL=0"
-        at "$at_port" "$at_command"
-        m_debug "huawei_at_hang: auto hang done"
-        m_debug "huawei_at_hang: turning radio off"
-        off_cmd="AT+CFUN=0"
-        on_cmd="AT+CFUN=1"
-        at "$at_port" "$off_cmd"
-        m_debug "huawei_at_hang: turning radio on"
-        at "$at_port" "$on_cmd"
-        return 0
-    fi
-    return 1
-}
-
-auto_dial_hang(){
-    m_debug "auto_dial_hang"
-    case "$manufacturer" in 
-        "huawei")
-            case "$platform" in
-                "unisoc")
-                    auto_dial_hang_huawei_unisoc
-                    return $?
-                    ;;
-            esac
-            ;;
-    esac
-    return 1
-}
-
+# Set IP config for L850-GL (Intel XMM NCM)
 ip_change_intel()
 {
     m_debug "ip_change_intel"
@@ -1068,15 +532,12 @@ ip_change_intel()
     local public_dns2_ipv4="8.8.4.4"
     local netmask="255.255.255.0"
 
-    # Get IPv4 from AT+CGPADDR (field 2 in quotes, IPv4 only)
     local paddr=$(at ${at_port} "AT+CGPADDR=$pdp_index" | grep "+CGPADDR:")
     ipv4_config=$(echo "$paddr" | awk -F'"' '{print $2}' | tr -d "\n\r")
 
-    # Gateway = IP + 1 (NCM Intel does not use ARP)
     local last_octet="${ipv4_config##*.}"
     gateway="${ipv4_config%.*}.$((last_octet+1))"
 
-    # Get DNS from AT+XDNS?
     local xdns=$(at ${at_port} "AT+XDNS?" | grep "+XDNS: $pdp_index," | head -1)
     ipv4_dns1=$(echo "$xdns" | awk -F'"' '{print $2}' | tr -d "\n\r")
     ipv4_dns2=$(echo "$xdns" | awk -F'"' '{print $4}' | tr -d "\n\r")
@@ -1108,149 +569,13 @@ ip_change_intel()
     m_debug "ip_change_intel: set $interface_name to $ipv4_config gw=$gateway dns=$ipv4_dns1,$ipv4_dns2"
 }
 
-ip_change_fm350()
-{
-    m_debug "ip_change_fm350"
-    local public_dns1_ipv4="223.5.5.5"
-    local public_dns2_ipv4="119.29.29.29"
-    local netmask="255.255.255.0"
-
-    if [ "$driver" = "mtk_pcie" ]; then
-        mbim_port=$(echo "$at_port" | sed 's/at/mbim/g')
-
-        local config=$(umbim -d $mbim_port config)
-        ipv4_config=$(echo "$config" | grep "ipv4address:" | awk '{print $2}' | cut -d'/' -f1)
-        gateway=$(echo "$config" | grep "ipv4gateway:" | awk '{print $2}')
-
-        ipv4_dns1=$(echo "$config" | grep "ipv4dnsserver:" | head -n 1 | awk '{print $2}')
-        ipv4_dns2=$(echo "$config" | grep "ipv4dnsserver:" | tail -n 1 | awk '{print $2}')
-        [ -z "$ipv4_dns1" ] && ipv4_dns1="$public_dns1_ipv4"
-        [ -z "$ipv4_dns2" ] && ipv4_dns2="$public_dns2_ipv4"
-        # m_debug "umbim config: ipv4=$ipv4_config, gateway=$gateway, netmask=$netmask, dns1=$ipv4_dns1, dns2=$ipv4_dns2"
-    else
-        at_command="AT+CGPADDR=$pdp_index"
-        response=$(at ${at_port} ${at_command})
-        ipv4_config=$(echo "$response" | grep "+CGPADDR:" | grep -o '"[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+"' | head -1 | tr -d '"')
-        gateway="${ipv4_config%.*}.1"
-
-        response=$(at ${at_port} "AT+GTDNS=$pdp_index")
-        ipv4_dns=$(echo "$response" | grep "+GTDNS:" | head -1)
-        ipv4_dns1=$(echo "$ipv4_dns" | grep -o '"[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+"' | head -1 | tr -d '"')
-        ipv4_dns2=$(echo "$ipv4_dns" | grep -o '"[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+"' | tail -1 | tr -d '"')
-        [ -z "$ipv4_dns1" ] && ipv4_dns1="$public_dns1_ipv4"
-        [ -z "$ipv4_dns2" ] && ipv4_dns2="$public_dns2_ipv4"
-        uci_ipv4=$(uci -q get network.$interface_name.ipaddr)
-    fi
-    uci set network.${interface_name}.proto='static'
-    uci set network.${interface_name}.ipaddr="${ipv4_config}"
-    uci set network.${interface_name}.netmask="${netmask}"
-    uci set network.${interface_name}.gateway="${gateway}"
-    uci set network.${interface_name}.peerdns='0'
-    uci -q del network.${interface_name}.dns
-    uci add_list network.${interface_name}.dns="${ipv4_dns1}"
-    uci add_list network.${interface_name}.dns="${ipv4_dns2}"
-    uci commit network
-    ifdown ${interface_name}
-    ifup ${interface_name}
-    m_debug "set interface $interface_name to $ipv4_config"
-
-}
-
-handle_5gethernet()
-{
-    case $manufacturer in
-        "quectel")
-            case $platform in
-                "qualcomm")
-                    quectel_qualcomm_ethernet
-                    ;;
-                "unisoc")
-                    quectel_unisoc_ethernet
-                    ;;
-            esac
-            ;;
-    esac
-}
-
-quectel_unisoc_ethernet()
-{
-    case "$driver" in
-        "ncm"|\
-        "ecm"|\
-        "rndis")
-            check_ethernet_cmd="AT+QCFG=\"ethernet\""
-            time=0
-            while [ $time -lt 5 ]; do
-                result=$(at $at_port $check_ethernet_cmd | grep "+QCFG:")
-                if [ -n "$result" ]; then
-                    if [ -n "$(echo $result | grep "ethernet\",1")" ]; then
-                        echo "1"
-                        m_debug "5G Ethernet mode is enabled"
-                        break
-                    fi
-                fi
-                sleep 5
-                time=$((time+1))
-            done
-        ;;
-    esac
-}
-
-quectel_qualcomm_ethernet()
-{
-     case "$driver" in
-        "mbim")
-            eth_driver_at="AT+QETH=\"eth_driver\""
-            data_interface_at="AT+QCFG=\"data_interface\""
-            ehter_driver_expect="\"r8125\",1"
-            data_interface_expect="\"data_interface\",1"
-
-            time=0
-            while [ $time -lt 5 ]; do
-                eth_driver_result=$(at $at_port $eth_driver_at | grep "+QETH:")
-                time=$(($time+1))
-                sleep 1
-                if [ -n "$eth_driver_result" ];then
-                    break
-                fi
-            done
-            time=0
-            while [ $time -lt 5 ]; do
-                data_interface_result=$(at $at_port $data_interface_at | grep "+QCFG:")
-                time=$(($time+1))
-                sleep 1
-                if [ -n "$data_interface_result" ];then
-                    break
-                fi
-            done
-            eth_driver_pass=$(echo $eth_driver_result | grep "$ehter_driver_expect")
-            data_interface_pass=$(echo $data_interface_result | grep "$data_interface_expect")
-            if  [ -n "$eth_driver_pass" ] && [ -n "$data_interface_pass" ];then
-                echo "1"
-                m_debug "5G Ethernet mode is enabled"
-            fi
-            ;;
-    esac
-}
-
 handle_ip_change()
 {
     export ipv4
     export ipv6
     export connection_status
-    m_debug  "ip changed from $ipv6_cache,$ipv4_cache to $ipv6,$ipv4"
-    case $manufacturer in
-        "fibocom")
-            case $platform in
-                "mediatek")
-                    ip_change_fm350
-                    ;;
-                "intel")
-                    ip_change_intel
-                    ;;
-            esac
-            ;;
-    esac
+    m_debug "ip changed from $ipv6_cache,$ipv4_cache to $ipv6,$ipv4"
+    ip_change_intel
 }
 
 check_cfun(){
@@ -1272,14 +597,28 @@ check_logfile_line()
     local line=$(wc -l $log_file | awk '{print $1}')
     if [ $line -gt 300 ];then
         echo "" > $log_file
-        m_debug  "log file line is over 300,clear it"
+        m_debug "log file line is over 300,clear it"
     fi
+}
+
+do_redial()
+{
+    # Bug #1 fix: always disconnect cleanly before redialing on L850GL (Intel XMM).
+    # AT+XDATACHANNEL=0 + AT+CGDATA=0 must be sent before AT+CGDATA="M-RAW_IP",
+    # otherwise modem returns ERROR (data channel still considered active) and hangs.
+    m_debug "do_redial: disconnecting before redial"
+    at "${at_port}" "AT+XDATACHANNEL=0" 2>/dev/null
+    at "${at_port}" "AT+CGDATA=0" 2>/dev/null
+    # Bug #3 fix: give modem time to fully release the data channel before reconnecting
+    sleep 5
+    at_dial
+    # Bug #3 fix: wait for modem to assign IP before next check_ip poll
+    sleep 20
 }
 
 unexpected_response_count=0
 at_dial_monitor()
 {
-    #check if support auto dial
     check_cfun
     if [ $? -ne 0 ]; then
         m_debug "CFUN is not 1, try to set it to 1"
@@ -1300,41 +639,52 @@ at_dial_monitor()
             sleep 30
         done
     fi
+    # Initial dial — no prior disconnect needed on first connect
     at_dial
-    ipv4_cache=$ipv4
-    ipv6_cache=$ipv6
-    [ "$manufacturer" = "fibocom" ] && [ "$platform" = "intel" ] && sleep 15 || sleep 5
+    ipv4_cache=""
+    ipv6_cache=""
+    # Bug #3 fix: wait for IP to be assigned before first check_ip
+    sleep 20
     while true; do
         check_ip
         case $connection_status in
             0)
-                at_dial
-                [ "$manufacturer" = "fibocom" ] && [ "$platform" = "intel" ] && sleep 15 || sleep 3
+                # Bug #1 fix: use do_redial (disconnect + reconnect) instead of bare at_dial
+                m_debug "connection lost, redialing"
+                do_redial
                 ;;
             -1)
                 unexpected_response_count=$((unexpected_response_count+1))
                 if [ $unexpected_response_count -gt 3 ]; then
-                    at_dial
+                    m_debug "too many unexpected responses, redialing"
+                    do_redial
                     unexpected_response_count=0
                 fi
                 sleep 5
                 ;;
             *)
-                if [ "$ipv4" != "$ipv4_cache" ] || [ "$ipv6" != "$ipv6_cache" ]; then
+                unexpected_response_count=0
+                # Bug #2 fix: normalize IP strings before comparison to avoid
+                # false positives from whitespace/formatting differences that
+                # would trigger unnecessary ifdown/ifup cycles (~2hr freeze)
+                ipv4_normalized=$(echo "$ipv4" | tr -d ' \n\r\t')
+                ipv4_cache_normalized=$(echo "$ipv4_cache" | tr -d ' \n\r\t')
+                if [ -n "$ipv4_normalized" ] && \
+                   [ "$ipv4_normalized" != "$ipv4_cache_normalized" ]; then
+                    m_debug "IP changed: $ipv4_cache_normalized -> $ipv4_normalized"
                     handle_ip_change
                     ipv4_cache=$ipv4
                     ipv6_cache=$ipv6
                 fi
-
                 pdp_type=$(echo $pdp_type | tr 'A-Z' 'a-z')
                 if [ "$pdp_type" = "ipv4v6" ]; then
                     local ifup_time=$(ubus call network.interface.$interface6_name status 2>/dev/null | jsonfilter -e '@.uptime' 2>/dev/null || echo 0)
                     local origin_device=$(uci -q get network.$interface_name.device 2>/dev/null || echo "")
-                    [ "$ifup_time" -lt 5 ] && continue
+                    [ "$ifup_time" -lt 5 ] && { sleep 30; continue; }
                     rdisc6 $origin_device &
                     ndisc6 fe80::1 $origin_device &
                 fi
-                [ "$manufacturer" = "fibocom" ] && [ "$platform" = "intel" ] && sleep 30 || sleep 15
+                sleep 30
                 ;;
         esac
         check_logfile_line

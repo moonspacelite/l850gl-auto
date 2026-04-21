@@ -41,178 +41,105 @@
         }
     ],
     "fibocom": {
-        "qualcomm": [
+        "intel": [
             {
-                "设置当前使用的为卡1 > AT+GTDUALSIM=0": "AT+GTDUALSIM=0"
+                "查询固件版本 > ATI8": "ATI8"
             },
             {
-                "设置当前使用的为卡2 > AT+GTDUALSIM=1": "AT+GTDUALSIM=1"
+                "查询IMEI > AT+CGSN": "AT+CGSN"
             },
             {
-                "ECM手动拨号 > AT+GTRNDIS=1,1": "AT+GTRNDIS=1,1"
+                "查询IMSI > AT+CIMI": "AT+CIMI"
             },
             {
-                "ECM拨号断开 > AT+GTRNDIS=0,1": "AT+GTRNDIS=0,1"
+                "查询信号强度（RSRQ/RSRP） > AT+XCESQ?": "AT+XCESQ?"
             },
             {
-                "查询当前端口模式 > AT+GTUSBMODE?": "AT+GTUSBMODE?"
+                "查询信号强度（RSSI） > AT+CSQ?": "AT+CSQ?"
             },
             {
-                "QMI/GobiNet拨号模式 > AT+GTUSBMODE=32": "AT+GTUSBMODE=32"
+                "查询当前频段 > AT+XCCINFO?": "AT+XCCINFO?"
             },
             {
-                "ECM拨号模式 > AT+GTUSBMODE=18": "AT+GTUSBMODE=18"
+                "查询载波聚合频段 > AT+GTCAINFO?": "AT+GTCAINFO?"
             },
             {
-                "MBIM拨号模式 > AT+GTUSBMODE=30": "AT+GTUSBMODE=30"
-            },
-            {
-                "RNDIS拨号模式 > AT+GTUSBMODE=24": "AT+GTUSBMODE=24"
-            },
-            {
-                "NCM拨号模式 > AT+GTUSBMODE=18": "AT+GTUSBMODE=18"
-            },
-            {
-                "锁4G > AT+GTACT=2": "AT+GTACT=2"
-            },
-            {
-                "锁5G > AT+GTACT=14": "AT+GTACT=14"
-            },
-            {
-                "恢复自动搜索网络 > AT+GTACT=20": "AT+GTACT=20"
-            },
-            {
-                "查询当前连接的网络类型 > AT+PSRAT?": "AT+PSRAT?"
-            },
-            {
-                "查询模组IMEI > AT+GTSN=0,7": "AT+GTSN=0,7"
-            },
-            {
-                "更改模组IMEI > AT+GTSN=1,7,\"IMEI\"": "AT+GTSN=1,7,\"在此设置IMEI\""
-            },
-            {
-                "报告一次当前BBIC的温度 > AT+MTSM=1,6": "AT+MTSM=1,6"
-            },
-            {
-                "报告一次当前射频的温度 > AT+MTSM=1,7": "AT+MTSM=1,7"
-            },
-            {
-                "重启模组 > AT+CFUN=15": "AT+CFUN=15"
-            }
-        ],
-        "unisoc": [
-            {
-                "设置当前使用的为卡1 > AT+GTDUALSIM=0": "AT+GTDUALSIM=0"
-            },
-            {
-                "设置当前使用的为卡2 > AT+GTDUALSIM=1": "AT+GTDUALSIM=1"
-            },
-            {
-                "ECM手动拨号 > AT+GTRNDIS=1,1": "AT+GTRNDIS=1,1"
-            },
-            {
-                "ECM拨号断开 > AT+GTRNDIS=0,1": "AT+GTRNDIS=0,1"
+                "查询当前网络模式 > AT+XACT?": "AT+XACT?"
             },
             {
                 "查询当前端口模式 > AT+GTUSBMODE?": "AT+GTUSBMODE?"
             },
             {
-                "ECM拨号模式 > AT+GTUSBMODE=18": "AT+GTUSBMODE=18"
+                "NCM模式 > AT+GTUSBMODE=0": "AT+GTUSBMODE=0"
             },
             {
-                "MBIM拨号模式 > AT+GTUSBMODE=30": "AT+GTUSBMODE=30"
+                "MBIM模式 > AT+GTUSBMODE=7": "AT+GTUSBMODE=7"
             },
             {
-                "RNDIS拨号模式 > AT+GTUSBMODE=24": "AT+GTUSBMODE=24"
+                "仅4G全频段 > AT+XACT=2,,,0": "AT+XACT=2,,,0"
             },
             {
-                "NCM拨号模式 > AT+GTUSBMODE=18": "AT+GTUSBMODE=18"
+                "仅3G全频段 > AT+XACT=1,,,0": "AT+XACT=1,,,0"
             },
             {
-                "锁4G > AT+GTACT=2": "AT+GTACT=2"
+                "3G+4G全频段 > AT+XACT=4,,,0": "AT+XACT=4,,,0"
             },
             {
-                "锁5G > AT+GTACT=14": "AT+GTACT=14"
+                "锁B1频段 > AT+XACT=2,,,101": "AT+XACT=2,,,101"
             },
             {
-                "恢复自动搜索网络 > AT+GTACT=20": "AT+GTACT=20"
+                "锁B3频段 > AT+XACT=2,,,103": "AT+XACT=2,,,103"
             },
             {
-                "查询当前连接的网络类型 > AT+PSRAT?": "AT+PSRAT?"
+                "锁B8频段 > AT+XACT=2,,,108": "AT+XACT=2,,,108"
             },
             {
-                "查询模组IMEI > AT+GTSN=0,7": "AT+GTSN=0,7"
+                "锁B40频段 > AT+XACT=2,,,140": "AT+XACT=2,,,140"
             },
             {
-                "更改模组IMEI > AT+GTSN=1,7,\"IMEI\"": "AT+GTSN=1,7,\"在此设置IMEI\""
+                "锁B1+B3频段 > AT+XACT=2,,,101,103": "AT+XACT=2,,,101,103"
             },
             {
-                "报告一次当前BBIC的温度 > AT+MTSM=1,6": "AT+MTSM=1,6"
+                "锁B1+B8频段 > AT+XACT=2,,,101,108": "AT+XACT=2,,,101,108"
             },
             {
-                "报告一次当前射频的温度 > AT+MTSM=1,7": "AT+MTSM=1,7"
+                "锁B3+B8频段 > AT+XACT=2,,,103,108": "AT+XACT=2,,,103,108"
             },
             {
-                "重启模组 > AT+CFUN=15": "AT+CFUN=15"
-            }
-        ],
-        "mediatek": [
-            {
-                "设置当前使用的为卡1 > AT+GTDUALSIM=0": "AT+GTDUALSIM=0"
+                "锁B1+B40频段 > AT+XACT=2,,,101,140": "AT+XACT=2,,,101,140"
             },
             {
-                "设置当前使用的为卡2 > AT+GTDUALSIM=1": "AT+GTDUALSIM=1"
+                "锁B3+B40频段 > AT+XACT=2,,,103,140": "AT+XACT=2,,,103,140"
             },
             {
-                "手动设置接入点 > AT+CGDCONT=3,\"IPV4V6\",\"APN\"": "AT+CGDCONT=3,\"IPV4V6\",\"在此设置APN\""
+                "锁B8+B40频段 > AT+XACT=2,,,108,140": "AT+XACT=2,,,108,140"
             },
             {
-                "手动拨号 > AT+CGACT=1,3": "AT+CGACT=1,3"
+                "锁B1+B3+B8频段 > AT+XACT=2,,,101,103,108": "AT+XACT=2,,,101,103,108"
             },
             {
-                "停止拨号 > AT+CGACT=0,3": "AT+CGACT=0,3"
+                "锁B1+B3+B40频段 > AT+XACT=2,,,101,103,140": "AT+XACT=2,,,101,103,140"
             },
             {
-                "查询当前端口模式 > AT+GTUSBMODE?": "AT+GTUSBMODE?"
+                "锁B1+B8+B40频段 > AT+XACT=2,,,101,108,140": "AT+XACT=2,,,101,108,140"
             },
             {
-                "RNDIS拨号模式（40） > AT+GTUSBMODE=40": "AT+GTUSBMODE=40"
+                "锁B3+B8+B40频段 > AT+XACT=2,,,103,108,140": "AT+XACT=2,,,103,108,140"
             },
             {
-                "RNDIS拨号模式（41） > AT+GTUSBMODE=41": "AT+GTUSBMODE=41"
+                "锁B1+B3+B8+B40频段 > AT+XACT=2,,,101,103,108,140": "AT+XACT=2,,,101,103,108,140"
             },
             {
-                "锁4G > AT+GTACT=2": "AT+GTACT=2"
+                "开启飞行模式 > AT+CFUN=4": "AT+CFUN=4"
             },
             {
-                "锁5G > AT+GTACT=14": "AT+GTACT=14"
+                "关闭飞行模式 > AT+CFUN=1": "AT+CFUN=1"
             },
             {
-                "恢复自动搜索网络 > AT+GTACT=20": "AT+GTACT=20"
+                "查询错误信息 > AT+XEER": "AT+XEER"
             },
             {
-                "查询当前连接的网络类型 > AT+PSRAT?": "AT+PSRAT?"
-            },
-            {
-                "查询载波聚合小区信息 > AT+GTCAINFO?": "AT+GTCAINFO?"
-            },
-            {
-                "查询模组IMEI > AT+GTSN=0,7": "AT+GTSN=0,7"
-            },
-            {
-                "更改模组IMEI > AT+GTSN=1,7,\"IMEI\"": "AT+GTSN=1,7,\"在此设置IMEI\""
-            },
-            {
-                "解锁FCC > AT+GTFCCLOCKMODE=0": "AT+GTFCCLOCKMODE=0"
-            },
-            {
-                "解除ESIM锁定 > AT+GTESIMCFG=0,0,0": "AT+GTESIMCFG=0,0,0"
-            },
-            {
-                "解除温控 > AT+GTTHERMAL=0": "AT+GTTHERMAL=0"
-            },
-            {
-                "获取当前温度 > AT+GTSENRDTEMP=0": "AT+GTSENRDTEMP=0"
+                "查询当前电压 > AT+CBC": "AT+CBC"
             },
             {
                 "重启模组 > AT+CFUN=15": "AT+CFUN=15"
