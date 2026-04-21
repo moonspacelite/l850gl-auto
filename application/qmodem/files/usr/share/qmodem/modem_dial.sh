@@ -590,6 +590,10 @@ ip_change_intel()
         echo "nameserver ${ipv4_dns2}" >> /tmp/resolv.conf
     }
 
+    # Restart DHCPv6 client for v6 alias (non-blocking) so 2_1v6 gets IPv6
+    # after IP refresh. Old code never restarted it because ifup hung on parent.
+    ifup "${interface6_name}" &
+
     m_debug "ip_change_intel: set $interface_name to $ipv4_config gw=$gateway dns=$ipv4_dns1,$ipv4_dns2"
 }
 
