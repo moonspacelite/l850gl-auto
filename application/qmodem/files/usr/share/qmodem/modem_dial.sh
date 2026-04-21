@@ -216,15 +216,15 @@ check_dial_prepare()
 check_ip()
 {
     local resp=$(at "$at_port" "AT+CGPADDR=$pdp_index" 2>/dev/null | grep "+CGPADDR:")
-    local intel_ip=$(echo "$resp" | awk -F'"' '{print $2}')
-    intel_ip=$(echo "$intel_ip" | tr -d "\n\r")
-    if [ -n "$intel_ip" ] && [ "$intel_ip" != "0.0.0.0" ]; then
-        ipv4="$intel_ip"
-        connection_status=1
-    else
-        ipv4=""
-        connection_status=0
-    fi
+    ipv4=$(echo "$resp" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | grep -v "^0\\.0\\.0\\.0$" | head -1)
+    ipv6=$(echo "$resp" | grep -oE "\\b([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\\b" | head -1)
+    ipv4=$(echo "$ipv4" | tr -d " \n\r\t")
+    ipv6=$(echo "$ipv6" | tr -d " \n\r\t")
+
+    connection_status=0
+    [ -n "$ipv4" ] && connection_status=1
+    [ -n "$ipv6" ] && connection_status=2
+    [ -n "$ipv4" ] && [ -n "$ipv6" ] && connection_status=3
 }
 
 append_to_fw_zone()
@@ -311,6 +311,8 @@ set_if()
     fi
     if [ "$env6" -eq 1 ];then
         if [ -z "$interfacev6" ];then
+            uci set network.lan.ipv6='1'
+            uci set network.lan.ip6assign='64'
             uci set network.${interface6_name}='interface'
             uci set network.${interface6_name}.modem_config="${modem_config}"
             uci set network.${interface6_name}.proto="${protov6}"
@@ -541,24 +543,32 @@ ip_change_intel()
     local netmask="255.255.255.0"
     local prefix="24"
 
+    # Ambil IPv4 dari CGPADDR — gunakan grep -oE agar konsisten dengan check_ip
     local paddr=$(at ${at_port} "AT+CGPADDR=$pdp_index" | grep "+CGPADDR:")
-    ipv4_config=$(echo "$paddr" | awk -F'"' '{print $2}' | tr -d "\n\r")
+    ipv4_config=$(echo "$paddr" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | grep -v "^0\\.0\\.0\\.0$" | head -1)
+    ipv4_config=$(echo "$ipv4_config" | tr -d " \n\r\t")
+
+    # Guard: jika tidak ada IP valid, skip
+    if [ -z "$ipv4_config" ] || [ "$ipv4_config" = "0.0.0.0" ]; then
+        m_debug "ip_change_intel: no valid IP from CGPADDR, skipping"
+        return
+    fi
 
     local last_octet="${ipv4_config##*.}"
     gateway="${ipv4_config%.*}.$((last_octet+1))"
 
     local xdns=$(at ${at_port} "AT+XDNS?" | grep "+XDNS: $pdp_index," | head -1)
-    ipv4_dns1=$(echo "$xdns" | awk -F'"' '{print $2}' | tr -d "\n\r")
-    ipv4_dns2=$(echo "$xdns" | awk -F'"' '{print $4}' | tr -d "\n\r")
+    ipv4_dns1=$(echo "$xdns" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | head -1 | tr -d " \n\r\t")
+    ipv4_dns2=$(echo "$xdns" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | tail -1 | tr -d " \n\r\t")
 
-    [ -z "$ipv4_config" ] || [ "$ipv4_config" = "0.0.0.0" ] && {
-        m_debug "ip_change_intel: no valid IP from CGPADDR, skipping"
-        return
-    }
-    [ -z "$ipv4_dns1" ] || [ "$ipv4_dns1" = "0.0.0.0" ] && ipv4_dns1="$public_dns1_ipv4"
-    [ -z "$ipv4_dns2" ] || [ "$ipv4_dns2" = "0.0.0.0" ] && ipv4_dns2="$public_dns2_ipv4"
+    if [ -z "$ipv4_dns1" ] || [ "$ipv4_dns1" = "0.0.0.0" ]; then
+        ipv4_dns1="$public_dns1_ipv4"
+    fi
+    if [ -z "$ipv4_dns2" ] || [ "$ipv4_dns2" = "0.0.0.0" ]; then
+        ipv4_dns2="$public_dns2_ipv4"
+    fi
 
-    # Update UCI so config survives reboot (no ifup — avoids blocking hang)
+    # Update UCI agar config bertahan setelah reboot (tanpa ifup — menghindari blocking hang)
     uci set network.${interface_name}.proto='static'
     uci set network.${interface_name}.ipaddr="${ipv4_config}"
     uci set network.${interface_name}.netmask="${netmask}"
@@ -570,28 +580,25 @@ ip_change_intel()
     uci add_list network.${interface_name}.dns="${ipv4_dns2}"
     uci commit network
 
-    # Apply IP directly via iproute2 — non-blocking, no ifdown/ifup
+    # Apply IP langsung via iproute2 — non-blocking, tanpa ifdown/ifup
     ip link set "${modem_netcard}" up
     ip link set "${modem_netcard}" arp off
-    # Flush old addresses and routes on this interface
     ip addr flush dev "${modem_netcard}"
-    ip route del default via "${gateway}" dev "${modem_netcard}" 2>/dev/null || true
-    # Set new IP and route
+    ip route del default dev "${modem_netcard}" 2>/dev/null || true
     ip addr add "${ipv4_config}/${prefix}" dev "${modem_netcard}"
     ip route add default via "${gateway}" dev "${modem_netcard}" metric "${metric:-11}"
 
-    # Update DNS directly — no netifd involvement
+    # Update DNS langsung tanpa netifd
     {
         echo "nameserver ${ipv4_dns1}"
         echo "nameserver ${ipv4_dns2}"
-    } > /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || \
-    {
+    } > /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || {
         echo "nameserver ${ipv4_dns1}" > /tmp/resolv.conf
         echo "nameserver ${ipv4_dns2}" >> /tmp/resolv.conf
     }
 
-    # Restart DHCPv6 client for v6 alias (non-blocking) so 2_1v6 gets IPv6
-    # after IP refresh. Old code never restarted it because ifup hung on parent.
+    # Restart odhcp6c untuk interface v6 (non-blocking)
+    # Sebelumnya tidak pernah dijalankan karena ifup pada parent hang
     ifup "${interface6_name}" &
 
     m_debug "ip_change_intel: set $interface_name to $ipv4_config gw=$gateway dns=$ipv4_dns1,$ipv4_dns2"

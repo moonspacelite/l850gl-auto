@@ -1,0 +1,27 @@
+#!/bin/sh
+# Trigger qmodem_network reload when modem interface goes down
+# Fix: after operator IP refresh, wwan0 comes back up but no redial fires.
+
+[ "$ACTION" = "ifdown" ] || exit 0
+
+# Don't react to v6 going down — parent v4 interface will handle it
+echo "$INTERFACE" | grep -q "v6$" && exit 0
+
+# Don't trigger if qmodem dial is globally disabled
+GLOBAL_DIAL=$(uci -q get qmodem.main.enable_dial)
+[ "$GLOBAL_DIAL" = "0" ] && exit 0
+
+# Only react to interfaces managed by qmodem (has modem_config attribute)
+IS_MODEM_IF=0
+for cfg in $(uci -q show network | grep "\.modem_config=" | awk -F'[.=]' '{print $2}'); do
+    ifalias=$(uci -q get qmodem.${cfg}.alias 2>/dev/null)
+    if [ "$INTERFACE" = "$cfg" ] || [ "$INTERFACE" = "$ifalias" ]; then
+        IS_MODEM_IF=1
+        break
+    fi
+done
+[ "$IS_MODEM_IF" = "0" ] && exit 0
+
+logger -t qmodem_redial "Interface $INTERFACE (${DEVICE}) went down — reload in 15s"
+sleep 15
+/etc/init.d/qmodem_network reload
