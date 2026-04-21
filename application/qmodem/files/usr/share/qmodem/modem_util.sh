@@ -83,118 +83,63 @@ update_sim_slot()
 
 at_get_slot()
 {
-	case $vendor in
-		"quectel")
-			at_res=$(at $at_port AT+QSIMDET? |grep +QSIMDET: |awk -F: '{print $2}')
-			case "$at_res" in
-				"1")
-					sim_slot="1"
-					;;
-				"2")
-					sim_slot="2"
-					;;
-				*)
-					sim_slot="1"
-					;;
-			*)
-				sim_slot="1"
-				;;
-			esac
-			;;
-		"fibocom")
-			at_res=$(at $at_port AT+GTDUALSIM? |grep +GTDUALSIM: |awk -F: '{print $2}')
-			case $at_res in
-				"0")
-					sim_slot="1"
-					;;
-				"1")
-					sim_slot="2"
-					;;
-				*)
-					sim_slot="1"
-					;;
-			*)
-				sim_slot="1"
-				;;
-			esac
-			;;
-		"simcom")
-			at_res=$(at $at_port AT+SMSIMCFG? | grep "+SMSIMCFG:" | awk -F',' '{print $2}' | sed 's/\r//g')
-			case $at_res in
-				"1")
-					sim_slot="1"
-					;;
-				"2")
-					sim_slot="2"
-					;;
-				*)
-					sim_slot="1"
-					;;
-			*)
-				sim_slot="1"
-				;;
-			esac
-			;;
-		"meig")
-			at_res=$(at $at_port AT^SIMSLOT? | grep "\^SIMSLOT:" | awk -F': ' '{print $2}' | awk -F',' '{print $2}')
-			case $at_res in
-				"1")
-					sim_slot="1"
-					;;
-				"0")
-					sim_slot="2"
-					;;
-				*)
-					sim_slot="1"
-					;;
-			*)
-				sim_slot="1"
-				;;
-			esac
-			;;
-		"neoway")
-			at_res=$(at $at_port 'AT+SIMCROSS?' | grep "+SIMCROSS:" | awk -F'[ ,]' '{print $2}' | sed 's/\r//g')
-			case $at_res in
-				"1")
-					sim_slot="1"
-					;;
-				"2")
-					sim_slot="2"
-					;;
-				*)
-					sim_slot="1"
-					;;
-			*)
-				sim_slot="1"
-				;;
-			esac
-			;;
-		"telit")
-			at_res=$(at $at_port AT#QSS? | grep "#QSS:" | awk -F',' '{print $3}' | sed 's/\r//g')
-			case $at_res in
-				"0")
-					sim_slot="1"
-					;;
-				"1")
-					sim_slot="2"
-					;;
-				*)
-					sim_slot="1"
-					;;
-			*)
-				sim_slot="1"
-				;;
-			esac
-			;;
-		*)
-			at_q_res=$(at $at_port AT+QSIMDET? |grep +QSIMDET: |awk -F: '{print $2}')
-			at_f_res=$(at $at_port AT+GTDUALSIM? |grep +GTDUALSIM: |awk -F: '{print $2}')
-			[ "$at_q_res" == "1" ] && sim_slot="1" && return
-			[ "$at_q_res" == "2" ] && sim_slot="2" && return
-			[ "$at_f_res" == "0" ] && sim_slot="1" && return
-			[ "$at_f_res" == "1" ] && sim_slot="2" && return
-			sim_slot="1"
-		;;
-
-	esac
+        case $vendor in
+                "quectel")
+                        at_res=$(at $at_port AT+QSIMDET? |grep +QSIMDET: |awk -F: '{print $2}')
+                        case "$at_res" in
+                                "1") sim_slot="1" ;;
+                                "2") sim_slot="2" ;;
+                                *)   sim_slot="1" ;;
+                        esac
+                        ;;
+                "fibocom")
+                        at_res=$(at $at_port AT+GTDUALSIM? |grep +GTDUALSIM: |awk -F: '{print $2}')
+                        case $at_res in
+                                "0") sim_slot="1" ;;
+                                "1") sim_slot="2" ;;
+                                *)   sim_slot="1" ;;
+                        esac
+                        ;;
+                "simcom")
+                        at_res=$(at $at_port AT+SMSIMCFG? | grep "+SMSIMCFG:" | awk -F',' '{print $2}' | sed 's/\r//g')
+                        case $at_res in
+                                "1") sim_slot="1" ;;
+                                "2") sim_slot="2" ;;
+                                *)   sim_slot="1" ;;
+                        esac
+                        ;;
+                "meig")
+                        at_res=$(at $at_port AT^SIMSLOT? | grep "\^SIMSLOT:" | awk -F': ' '{print $2}' | awk -F',' '{print $2}')
+                        case $at_res in
+                                "1") sim_slot="1" ;;
+                                "0") sim_slot="2" ;;
+                                *)   sim_slot="1" ;;
+                        esac
+                        ;;
+                "neoway")
+                        at_res=$(at $at_port 'AT+SIMCROSS?' | grep "+SIMCROSS:" | awk -F'[ ,]' '{print $2}' | sed 's/\r//g')
+                        case $at_res in
+                                "1") sim_slot="1" ;;
+                                "2") sim_slot="2" ;;
+                                *)   sim_slot="1" ;;
+                        esac
+                        ;;
+                "telit")
+                        at_res=$(at $at_port AT#QSS? | grep "#QSS:" | awk -F',' '{print $3}' | sed 's/\r//g')
+                        case $at_res in
+                                "0") sim_slot="1" ;;
+                                "1") sim_slot="2" ;;
+                                *)   sim_slot="1" ;;
+                        esac
+                        ;;
+                *)
+                        at_q_res=$(at $at_port AT+QSIMDET? |grep +QSIMDET: |awk -F: '{print $2}')
+                        at_f_res=$(at $at_port AT+GTDUALSIM? |grep +GTDUALSIM: |awk -F: '{print $2}')
+                        [ "$at_q_res" = "1" ] && sim_slot="1" && return
+                        [ "$at_q_res" = "2" ] && sim_slot="2" && return
+                        [ "$at_f_res" = "0" ] && sim_slot="1" && return
+                        [ "$at_f_res" = "1" ] && sim_slot="2" && return
+                        sim_slot="1"
+                        ;;
+        esac
 }

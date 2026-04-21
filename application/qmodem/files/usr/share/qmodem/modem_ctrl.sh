@@ -18,7 +18,7 @@ modem_slot=$(basename $modem_path)
     pdp_index="1"
 }
 
-[ $use_ubus -eq 1 ] && use_ubus_flag="-u"
+[ "$use_ubus" = "1" ] && use_ubus_flag="-u"
 
 #please update dynamic_load.json to add new vendor
 vendor_script_prefix="/usr/share/qmodem/vendor"
