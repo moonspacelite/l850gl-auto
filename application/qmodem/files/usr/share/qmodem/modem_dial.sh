@@ -525,12 +525,21 @@ at_auto_dial()
 }
 
 # Set IP config for L850-GL (Intel XMM NCM)
+# Root cause of 2-hour freeze: operator XL reassigns IP every ~2 hours.
+# The old implementation called ifdown + ifup which blocks indefinitely on
+# proto=static interfaces when netifd is slow — script hangs inside ifup,
+# never returns to at_dial_monitor loop, internet stays dead until manual redial.
+#
+# Fix: bypass ifdown/ifup entirely. Apply the new IP directly via iproute2
+# (ip addr, ip route) and update /etc/resolv.conf for DNS — no blocking calls.
+# uci is still updated so the config stays persistent across reboots.
 ip_change_intel()
 {
     m_debug "ip_change_intel"
     local public_dns1_ipv4="8.8.8.8"
     local public_dns2_ipv4="8.8.4.4"
     local netmask="255.255.255.0"
+    local prefix="24"
 
     local paddr=$(at ${at_port} "AT+CGPADDR=$pdp_index" | grep "+CGPADDR:")
     ipv4_config=$(echo "$paddr" | awk -F'"' '{print $2}' | tr -d "\n\r")
@@ -549,6 +558,7 @@ ip_change_intel()
     [ -z "$ipv4_dns1" ] || [ "$ipv4_dns1" = "0.0.0.0" ] && ipv4_dns1="$public_dns1_ipv4"
     [ -z "$ipv4_dns2" ] || [ "$ipv4_dns2" = "0.0.0.0" ] && ipv4_dns2="$public_dns2_ipv4"
 
+    # Update UCI so config survives reboot (no ifup — avoids blocking hang)
     uci set network.${interface_name}.proto='static'
     uci set network.${interface_name}.ipaddr="${ipv4_config}"
     uci set network.${interface_name}.netmask="${netmask}"
@@ -559,13 +569,27 @@ ip_change_intel()
     uci add_list network.${interface_name}.dns="${ipv4_dns1}"
     uci add_list network.${interface_name}.dns="${ipv4_dns2}"
     uci commit network
-    ifdown ${interface_name}
-    ip link set ${modem_netcard} up
-    ip link set ${modem_netcard} arp off
-    ifup ${interface_name}
-    sleep 2
-    ip link set ${modem_netcard} up
-    ip link set ${modem_netcard} arp off
+
+    # Apply IP directly via iproute2 — non-blocking, no ifdown/ifup
+    ip link set "${modem_netcard}" up
+    ip link set "${modem_netcard}" arp off
+    # Flush old addresses and routes on this interface
+    ip addr flush dev "${modem_netcard}"
+    ip route del default via "${gateway}" dev "${modem_netcard}" 2>/dev/null || true
+    # Set new IP and route
+    ip addr add "${ipv4_config}/${prefix}" dev "${modem_netcard}"
+    ip route add default via "${gateway}" dev "${modem_netcard}" metric "${metric:-11}"
+
+    # Update DNS directly — no netifd involvement
+    {
+        echo "nameserver ${ipv4_dns1}"
+        echo "nameserver ${ipv4_dns2}"
+    } > /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || \
+    {
+        echo "nameserver ${ipv4_dns1}" > /tmp/resolv.conf
+        echo "nameserver ${ipv4_dns2}" >> /tmp/resolv.conf
+    }
+
     m_debug "ip_change_intel: set $interface_name to $ipv4_config gw=$gateway dns=$ipv4_dns1,$ipv4_dns2"
 }
 
