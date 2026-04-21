@@ -275,7 +275,7 @@ get_network_prefer_intel()
     json_add_object network_prefer
     json_add_string 3G $network_prefer_3g
     json_add_string 4G $network_prefer_4g
-    json_close_array
+    json_close_object
 }
 
 set_network_prefer_intel()
