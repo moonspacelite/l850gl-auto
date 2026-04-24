@@ -237,7 +237,9 @@ check_ip()
             return
         fi
         local config
-        config=$(umbim -n -d "$mbim_port" config 2>/dev/null)
+        # -t 10: bail out if the modem's MBIM control port stops responding
+        # so the monitor loop doesn't wedge indefinitely on a dead modem.
+        config=$(umbim -n -t 10 -d "$mbim_port" config 2>/dev/null)
         ipv4=$(echo "$config" | awk '/ipv4address:/ {print $2}' | cut -d'/' -f1 | head -1)
         ipv6=$(echo "$config" | awk '/ipv6address:/ {print $2}' | cut -d'/' -f1 | head -1)
         ipv4=$(echo "$ipv4" | grep -v "^0\\.0\\.0\\.0$" | tr -d " \n\r\t")
@@ -497,10 +499,13 @@ mbim_hang()
     local mbim_port
     mbim_port=$(get_mbim_port)
     if [ -n "$mbim_port" ]; then
-        umbim -n -d "$mbim_port" disconnect 2>/dev/null
+        umbim -n -t 15 -d "$mbim_port" disconnect 2>/dev/null
     else
-        m_debug "mbim_hang: no mbim control device, falling back to AT"
-        at "${at_port}" "AT+CGACT=0,$pdp_index" 2>/dev/null
+        # No /dev/cdc-wdmX means the MBIM interface is gone (device unplug
+        # or kernel driver crash). There is nothing to disconnect from AT
+        # side for MBIM — AT+CGACT is not how MBIM PDP contexts are torn
+        # down on XMM firmware. Just log and let the caller retry.
+        m_debug "mbim_hang: no mbim control device; skipping"
     fi
 }
 
@@ -736,7 +741,8 @@ get_mbim_ip_info()
     [ -z "$mbim_port" ] && return
 
     local config
-    config=$(umbim -n -d "$mbim_port" config 2>/dev/null)
+    # -t 10: same rationale as check_ip — don't let a stuck modem block us.
+    config=$(umbim -n -t 10 -d "$mbim_port" config 2>/dev/null)
     local addr_cidr
     addr_cidr=$(echo "$config" | awk '/ipv4address:/ {print $2}' | head -1)
     ipv4_config=$(echo "$addr_cidr" | cut -d'/' -f1)
@@ -859,16 +865,15 @@ ip_change_intel()
     # BUG FIX (NCM auto-refresh): flush stale NAT sessions tied to the old IP.
     # Without this, existing TCP flows keep SNAT-ing to the old source address
     # that no longer exists on the interface, and apps hang for minutes.
-    if command -v conntrack >/dev/null 2>&1; then
-        if [ -n "$old_ipv4" ] && [ "$old_ipv4" != "$ipv4_config" ]; then
+    #
+    # IMPORTANT: only flush entries pinned to the old modem source IP.
+    # Do NOT touch the whole zone / all entries — that would drop SSH, VPN,
+    # and every LAN↔WAN flow on the router every ~2 hours.
+    if [ -n "$old_ipv4" ] && [ "$old_ipv4" != "$ipv4_config" ]; then
+        if command -v conntrack >/dev/null 2>&1; then
             conntrack -D -s "$old_ipv4" 2>/dev/null
             conntrack -D -d "$old_ipv4" 2>/dev/null
         fi
-        # Also flush anything bound to this netdev as a safety net.
-        conntrack -D --orig-zone 0 2>/dev/null | grep -q "$modem_netcard" && true
-    else
-        # Kernel-level fallback: write to /proc to flush NAT tables.
-        [ -w /proc/net/nf_conntrack ] && echo f > /proc/sys/net/netfilter/nf_conntrack_flush 2>/dev/null || true
     fi
 
     # Nudge netifd so subscribers (firewall, dnsmasq, ddns, mwan) re-read the
@@ -876,8 +881,8 @@ ip_change_intel()
     # not block on slow netifd.
     ubus call network reload 2>/dev/null &
 
-    # Refresh IPv6 side (odhcp6c) without blocking the monitor loop.
-    ifup "${interface6_name}" >/dev/null 2>&1 &
+    # IPv6 refresh is handled by handle_ip_change() separately when the monitor
+    # loop sees the v6 address change, so we don't duplicate it here.
 
     m_debug "ip_change_intel: ${interface_name} -> ${ipv4_config}/${prefix} gw=${gateway} dns=${ipv4_dns1},${ipv4_dns2} (was ${old_ipv4:-none})"
 }
@@ -887,8 +892,20 @@ handle_ip_change()
     export ipv4
     export ipv6
     export connection_status
-    m_debug "ip changed from $ipv6_cache,$ipv4_cache to $ipv6,$ipv4"
-    ip_change_intel
+    local ipv4_changed="${1:-0}"
+    local ipv6_changed="${2:-0}"
+    m_debug "ip changed from $ipv6_cache,$ipv4_cache to $ipv6,$ipv4 (v4=$ipv4_changed v6=$ipv6_changed)"
+    # IPv4 side uses our custom iproute2 + conntrack flush path.
+    if [ "$ipv4_changed" = "1" ]; then
+        ip_change_intel
+    fi
+    # IPv6 side uses proto=dhcpv6 (odhcp6c). When the operator rotates the
+    # delegated prefix we just need to re-trigger odhcp6c by cycling the
+    # v6 logical interface. Runs in the background so the monitor loop
+    # never blocks even if netifd is slow.
+    if [ "$ipv6_changed" = "1" ] && [ -n "$interface6_name" ]; then
+        ifup "${interface6_name}" >/dev/null 2>&1 &
+    fi
 }
 
 check_cfun(){
@@ -916,16 +933,25 @@ check_logfile_line()
 
 do_redial()
 {
-    # Bug #1 fix: always disconnect cleanly before redialing on L850GL (Intel XMM).
-    # AT+XDATACHANNEL=0 + AT+CGDATA=0 must be sent before AT+CGDATA="M-RAW_IP",
-    # otherwise modem returns ERROR (data channel still considered active) and hangs.
-    m_debug "do_redial: disconnecting before redial"
-    at "${at_port}" "AT+XDATACHANNEL=0" 2>/dev/null
-    at "${at_port}" "AT+CGDATA=0" 2>/dev/null
-    # Bug #3 fix: give modem time to fully release the data channel before reconnecting
+    # Always tear down the existing data session cleanly before redialing so
+    # the modem doesn't reject the reconnect with ERROR / silently hang.
+    #
+    # Backend matters here:
+    #   NCM:  AT+XDATACHANNEL=0 + AT+CGDATA=0  (Intel XMM data channel)
+    #   MBIM: umbim disconnect                  (PDP context lives in MBIM layer)
+    # Sending the NCM AT commands in MBIM mode is at best wasteful and on some
+    # XMM firmware can confuse the MBIM-managed PDP context.
+    m_debug "do_redial: disconnecting before redial (driver=$driver)"
+    if [ "$driver" = "mbim" ]; then
+        mbim_hang
+    else
+        at "${at_port}" "AT+XDATACHANNEL=0" 2>/dev/null
+        at "${at_port}" "AT+CGDATA=0" 2>/dev/null
+    fi
+    # Give modem time to fully release the data channel before reconnecting
     sleep 5
     at_dial
-    # Bug #3 fix: wait for modem to assign IP before next check_ip poll
+    # Wait for modem to assign IP before next check_ip poll
     sleep 20
 }
 
@@ -977,15 +1003,28 @@ at_dial_monitor()
                 ;;
             *)
                 unexpected_response_count=0
-                # Bug #2 fix: normalize IP strings before comparison to avoid
-                # false positives from whitespace/formatting differences that
-                # would trigger unnecessary ifdown/ifup cycles (~2hr freeze)
+                # Normalize IP strings before comparison to avoid false
+                # positives from whitespace/formatting differences that would
+                # otherwise trigger unnecessary reconfigure cycles.
                 ipv4_normalized=$(echo "$ipv4" | tr -d ' \n\r\t')
                 ipv4_cache_normalized=$(echo "$ipv4_cache" | tr -d ' \n\r\t')
+                ipv6_normalized=$(echo "$ipv6" | tr -d ' \n\r\t')
+                ipv6_cache_normalized=$(echo "$ipv6_cache" | tr -d ' \n\r\t')
+
+                ipv4_changed=0
+                ipv6_changed=0
                 if [ -n "$ipv4_normalized" ] && \
                    [ "$ipv4_normalized" != "$ipv4_cache_normalized" ]; then
-                    m_debug "IP changed: $ipv4_cache_normalized -> $ipv4_normalized"
-                    handle_ip_change
+                    ipv4_changed=1
+                fi
+                if [ -n "$ipv6_normalized" ] && \
+                   [ "$ipv6_normalized" != "$ipv6_cache_normalized" ]; then
+                    ipv6_changed=1
+                fi
+
+                if [ "$ipv4_changed" = "1" ] || [ "$ipv6_changed" = "1" ]; then
+                    m_debug "IP changed: v4 $ipv4_cache_normalized -> $ipv4_normalized, v6 $ipv6_cache_normalized -> $ipv6_normalized"
+                    handle_ip_change "$ipv4_changed" "$ipv6_changed"
                     ipv4_cache=$ipv4
                     ipv6_cache=$ipv6
                 fi
