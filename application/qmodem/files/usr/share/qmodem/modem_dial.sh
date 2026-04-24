@@ -171,7 +171,25 @@ update_config()
 
 check_dial_prepare()
 {
-    cpin=$(at "$at_port" "AT+CPIN?")
+    cpin=""
+    if [ -n "$at_port" ] && [ -e "$at_port" ]; then
+        cpin=$(at "$at_port" "AT+CPIN?")
+    fi
+    # MBIM fallback: ask the modem via umbim subscriber when AT isn't
+    # available or didn't answer. L850-GL in MBIM mode may have no
+    # scanner-validated AT port during early boot.
+    if [ -z "$cpin" ] && [ "$driver" = "mbim" ] && [ -n "$modem_netcard" ]; then
+        local _mbim_port
+        _mbim_port=$(get_mbim_port)
+        if [ -n "$_mbim_port" ]; then
+            local sub_out
+            sub_out=$(umbim -n -t 10 -d "$_mbim_port" subscriber 2>&1)
+            case "$sub_out" in
+                *ready*|*READY*) cpin="+CPIN: READY" ;;
+                *locked*|*LOCKED*|*pin*|*PIN*) cpin="+CPIN: SIM PIN" ;;
+            esac
+        fi
+    fi
     get_sim_status "$cpin"
     case $sim_state_code in
         "0")
@@ -499,7 +517,7 @@ mbim_hang()
     local mbim_port
     mbim_port=$(get_mbim_port)
     if [ -n "$mbim_port" ]; then
-        umbim -n -t 15 -d "$mbim_port" disconnect 2>/dev/null
+        _umbim_run 15 "$mbim_port" "hang" disconnect
     else
         # No /dev/cdc-wdmX means the MBIM interface is gone (device unplug
         # or kernel driver crash). There is nothing to disconnect from AT
@@ -526,6 +544,24 @@ hang()
     flush_if
 }
 
+# Run a umbim subcommand with verbose logging so operators can see progress
+# and failures of each MBIM state transition in /var/run/qmodem/<section>/dial_log.
+_umbim_run()
+{
+    local timeout="$1"
+    local mbim_port="$2"
+    local label="$3"
+    shift 3
+    local out rc
+    out=$(umbim -n -t "$timeout" -d "$mbim_port" "$@" 2>&1)
+    rc=$?
+    # Collapse multi-line output into a single log line for easy grep.
+    local compact
+    compact=$(echo "$out" | tr '\r\n' '  ' | sed 's/  */ /g')
+    m_debug "mbim($label) rc=$rc: $compact"
+    return $rc
+}
+
 # L850-GL MBIM dial (AT+GTUSBMODE=7) — use umbim over /dev/cdc-wdmX
 mbim_dial()
 {
@@ -536,11 +572,18 @@ mbim_dial()
         return 1
     fi
 
-    [ -z "$apn" ] && apn="auto"
+    # "auto" is a QModem-internal placeholder meaning "not configured".
+    # umbim passes the APN verbatim to the modem, and L850-GL/Intel XMM
+    # will reject a literal "auto" APN on most carriers. Treat it as unset
+    # and let the modem fall back to its own default APN selection (works
+    # on carriers that auto-provision APN via OTA, e.g. most Indonesian ops).
+    if [ -z "$apn" ] || [ "$apn" = "auto" ]; then
+        m_debug "mbim_dial: apn unset/'auto', sending empty APN (carrier default)"
+        apn=""
+    fi
     [ -z "$pdp_type" ] && pdp_type="IP"
     pdp_type=$(echo $pdp_type | tr 'a-z' 'A-Z')
 
-    # MBIM pin auth type is decimal: 0=none, 1=pap, 2=chap, 3=mschapv2
     local mbim_auth="none"
     case $(echo "$auth" | tr 'A-Z' 'a-z') in
         "pap")  mbim_auth="pap" ;;
@@ -548,23 +591,31 @@ mbim_dial()
         "mschapv2"|"ms-chap-v2") mbim_auth="mschapv2" ;;
     esac
 
-    m_debug "dialing(mbim): mbim_port:$mbim_port apn:$apn auth:$mbim_auth pdp_type:$pdp_type pdp_index:$pdp_index"
+    m_debug "dialing(mbim): mbim_port:$mbim_port apn:'$apn' auth:$mbim_auth pdp_type:$pdp_type pdp_index:$pdp_index"
 
-    # Bring the MBIM link up in order: radio -> attach -> connect.
-    # Mirrors OpenWrt's proto-mbim handler and is what the L850-GL expects.
-    umbim -n -t 15 -d "$mbim_port" radio on >/dev/null 2>&1
-    umbim -n -t 15 -d "$mbim_port" attach >/dev/null 2>&1
+    # Probe current state first so operators can correlate failures with
+    # subscriber/registration state (SIM locked, not registered, etc.).
+    _umbim_run 10 "$mbim_port" "caps"         caps
+    _umbim_run 10 "$mbim_port" "subscriber"   subscriber
+    _umbim_run 10 "$mbim_port" "registration" registration
 
-    # Drop any previous session before connecting again so we get a fresh IP.
-    umbim -n -t 15 -d "$mbim_port" disconnect >/dev/null 2>&1
+    # Bring the MBIM link up in order: radio -> attach -> disconnect -> connect.
+    _umbim_run 15 "$mbim_port" "radio-on" radio on
+    _umbim_run 15 "$mbim_port" "attach"   attach
+
+    _umbim_run 15 "$mbim_port" "disconnect" disconnect
     sleep 1
 
-    # umbim connect: <apn> [pin-type] [username] [password]
+    # umbim connect: <apn> <pin-type> <user> <password>
     if [ -n "$username" ] && [ -n "$password" ] && [ "$mbim_auth" != "none" ]; then
-        umbim -n -t 30 -d "$mbim_port" connect "$apn" "$mbim_auth" "$username" "$password"
+        _umbim_run 30 "$mbim_port" "connect" connect "$apn" "$mbim_auth" "$username" "$password"
     else
-        umbim -n -t 30 -d "$mbim_port" connect "$apn" none "" ""
+        _umbim_run 30 "$mbim_port" "connect" connect "$apn" none "" ""
     fi
+
+    # After connect, log the assigned config so operators immediately see
+    # whether the session actually came up.
+    _umbim_run 10 "$mbim_port" "config" config
 }
 
 # L850-GL AT dial (Intel XMM platform, NCM + MBIM)
@@ -909,6 +960,14 @@ handle_ip_change()
 }
 
 check_cfun(){
+    # When an AT control port isn't resolvable (common for MBIM composition
+    # if scanner's fastat probe failed), skip AT-based CFUN check. For MBIM
+    # the radio is managed via `umbim radio on` in mbim_dial(), so a missing
+    # AT port is not fatal — just log and move on.
+    if [ -z "$at_port" ] || [ ! -e "$at_port" ]; then
+        m_debug "check_cfun: at_port='$at_port' not usable; skipping CFUN check (driver=$driver)"
+        return 0
+    fi
     at_command="AT+CFUN?"
     response=$(at ${at_port} "${at_command}")
     cfun_status=$(echo "$response" | tr -d "\r" | grep "+CFUN:" | awk '{print $2}')

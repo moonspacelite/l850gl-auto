@@ -534,10 +534,17 @@ EOF
         uci -q add_list qmodem.$section_name.valid_at_ports="/dev/$at_port"
         uci -q set qmodem.$section_name.at_port="/dev/$at_port"
     done
-    # L850-GL (Intel XMM): ttyACM2 is the SMS/voice AT port in both USB modes
-    # (8087:095a NCM and 2cb7:0007 MBIM). Without sms_at_port set, send_sms
-    # uses the data AT port (ttyACM0) which does not support SMS PDU commands
-    # on this modem.
+    # L850-GL (Intel XMM): known-stable AT/SMS port layout regardless of USB
+    # mode (8087:095a NCM / 2cb7:0007 MBIM):
+    #   ttyACM0 @ if 1.2 → primary AT control
+    #   ttyACM1 @ if 1.4 → diag/trace
+    #   ttyACM2 @ if 1.6 → SMS + voice AT
+    # Without sms_at_port set, send_sms uses the data AT port (ttyACM0) which
+    # does not support SMS PDU commands on this modem. Also, the fastat
+    # validation probe in validate_at_port() is racy on this firmware —
+    # right after kernel binds cdc_acm, termios isn't settled and ATI can
+    # time out, leaving at_port empty. For L850-GL we therefore fall back
+    # to the known layout when validate_at_port produces no candidates.
     product_id_check=$(cat "$modem_path/idProduct" 2>/dev/null)
     vendor_id_check=$(cat "$modem_path/idVendor" 2>/dev/null)
     if { [ "$vendor_id_check" = "8087" ] && [ "$product_id_check" = "095a" ]; } || \
@@ -545,6 +552,15 @@ EOF
         if [ -e "/dev/ttyACM2" ]; then
             uci -q set qmodem.$section_name.sms_at_port="/dev/ttyACM2"
             m_debug "L850-GL: set sms_at_port to /dev/ttyACM2"
+        fi
+        # Fallback: if scanner's ATI probe failed for every ACM port, still
+        # wire up the well-known primary AT port so the dial monitor can
+        # query +CFUN/+CPIN/+CGCONTRDP. For MBIM this is nice-to-have;
+        # for NCM this is what unblocks the dial pipeline entirely.
+        if [ -z "$valid_at_ports" ] && [ -e "/dev/ttyACM0" ]; then
+            uci -q set qmodem.$section_name.at_port="/dev/ttyACM0"
+            uci -q add_list qmodem.$section_name.valid_at_ports="/dev/ttyACM0"
+            m_debug "L850-GL: validate_at_port found no port, falling back to /dev/ttyACM0"
         fi
     fi
     for at_port in $at_ports; do
