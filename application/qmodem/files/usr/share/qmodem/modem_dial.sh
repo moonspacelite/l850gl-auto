@@ -859,16 +859,15 @@ ip_change_intel()
     # BUG FIX (NCM auto-refresh): flush stale NAT sessions tied to the old IP.
     # Without this, existing TCP flows keep SNAT-ing to the old source address
     # that no longer exists on the interface, and apps hang for minutes.
-    if command -v conntrack >/dev/null 2>&1; then
-        if [ -n "$old_ipv4" ] && [ "$old_ipv4" != "$ipv4_config" ]; then
+    #
+    # IMPORTANT: only flush entries pinned to the old modem source IP.
+    # Do NOT touch the whole zone / all entries — that would drop SSH, VPN,
+    # and every LAN↔WAN flow on the router every ~2 hours.
+    if [ -n "$old_ipv4" ] && [ "$old_ipv4" != "$ipv4_config" ]; then
+        if command -v conntrack >/dev/null 2>&1; then
             conntrack -D -s "$old_ipv4" 2>/dev/null
             conntrack -D -d "$old_ipv4" 2>/dev/null
         fi
-        # Also flush anything bound to this netdev as a safety net.
-        conntrack -D --orig-zone 0 2>/dev/null | grep -q "$modem_netcard" && true
-    else
-        # Kernel-level fallback: write to /proc to flush NAT tables.
-        [ -w /proc/net/nf_conntrack ] && echo f > /proc/sys/net/netfilter/nf_conntrack_flush 2>/dev/null || true
     fi
 
     # Nudge netifd so subscribers (firewall, dnsmasq, ddns, mwan) re-read the
