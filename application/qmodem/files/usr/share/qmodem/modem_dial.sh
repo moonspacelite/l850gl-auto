@@ -881,8 +881,8 @@ ip_change_intel()
     # not block on slow netifd.
     ubus call network reload 2>/dev/null &
 
-    # Refresh IPv6 side (odhcp6c) without blocking the monitor loop.
-    ifup "${interface6_name}" >/dev/null 2>&1 &
+    # IPv6 refresh is handled by handle_ip_change() separately when the monitor
+    # loop sees the v6 address change, so we don't duplicate it here.
 
     m_debug "ip_change_intel: ${interface_name} -> ${ipv4_config}/${prefix} gw=${gateway} dns=${ipv4_dns1},${ipv4_dns2} (was ${old_ipv4:-none})"
 }
@@ -892,8 +892,20 @@ handle_ip_change()
     export ipv4
     export ipv6
     export connection_status
-    m_debug "ip changed from $ipv6_cache,$ipv4_cache to $ipv6,$ipv4"
-    ip_change_intel
+    local ipv4_changed="${1:-0}"
+    local ipv6_changed="${2:-0}"
+    m_debug "ip changed from $ipv6_cache,$ipv4_cache to $ipv6,$ipv4 (v4=$ipv4_changed v6=$ipv6_changed)"
+    # IPv4 side uses our custom iproute2 + conntrack flush path.
+    if [ "$ipv4_changed" = "1" ]; then
+        ip_change_intel
+    fi
+    # IPv6 side uses proto=dhcpv6 (odhcp6c). When the operator rotates the
+    # delegated prefix we just need to re-trigger odhcp6c by cycling the
+    # v6 logical interface. Runs in the background so the monitor loop
+    # never blocks even if netifd is slow.
+    if [ "$ipv6_changed" = "1" ] && [ -n "$interface6_name" ]; then
+        ifup "${interface6_name}" >/dev/null 2>&1 &
+    fi
 }
 
 check_cfun(){
@@ -991,15 +1003,28 @@ at_dial_monitor()
                 ;;
             *)
                 unexpected_response_count=0
-                # Bug #2 fix: normalize IP strings before comparison to avoid
-                # false positives from whitespace/formatting differences that
-                # would trigger unnecessary ifdown/ifup cycles (~2hr freeze)
+                # Normalize IP strings before comparison to avoid false
+                # positives from whitespace/formatting differences that would
+                # otherwise trigger unnecessary reconfigure cycles.
                 ipv4_normalized=$(echo "$ipv4" | tr -d ' \n\r\t')
                 ipv4_cache_normalized=$(echo "$ipv4_cache" | tr -d ' \n\r\t')
+                ipv6_normalized=$(echo "$ipv6" | tr -d ' \n\r\t')
+                ipv6_cache_normalized=$(echo "$ipv6_cache" | tr -d ' \n\r\t')
+
+                ipv4_changed=0
+                ipv6_changed=0
                 if [ -n "$ipv4_normalized" ] && \
                    [ "$ipv4_normalized" != "$ipv4_cache_normalized" ]; then
-                    m_debug "IP changed: $ipv4_cache_normalized -> $ipv4_normalized"
-                    handle_ip_change
+                    ipv4_changed=1
+                fi
+                if [ -n "$ipv6_normalized" ] && \
+                   [ "$ipv6_normalized" != "$ipv6_cache_normalized" ]; then
+                    ipv6_changed=1
+                fi
+
+                if [ "$ipv4_changed" = "1" ] || [ "$ipv6_changed" = "1" ]; then
+                    m_debug "IP changed: v4 $ipv4_cache_normalized -> $ipv4_normalized, v6 $ipv6_cache_normalized -> $ipv6_normalized"
+                    handle_ip_change "$ipv4_changed" "$ipv6_changed"
                     ipv4_cache=$ipv4
                     ipv6_cache=$ipv6
                 fi

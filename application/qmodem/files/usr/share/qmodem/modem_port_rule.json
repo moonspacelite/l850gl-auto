@@ -12,10 +12,7 @@
             "2cb7:0007": {
                 "name": "l850-gl",
                 "mode": "mbim",
-                "option_driver": 1,
-                "include": [
-                    "1.0"
-                ]
+                "option_driver": 1
             }
         }
     }
