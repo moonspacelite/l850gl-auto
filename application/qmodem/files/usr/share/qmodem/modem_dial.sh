@@ -223,7 +223,14 @@ check_dial_prepare()
         config_fullfill=1
     fi
     if [ "$config_fullfill" = "1" ] && [ "$sim_fullfill" = "1" ] && [ "$netdev_fullfill" = "1" ] ;then
-        at "$at_port" "AT+CFUN=1"
+        # Only issue AT+CFUN=1 when an AT port is actually usable. When the
+        # scanner's ATI probe raced and sim_fullfill was set via the MBIM
+        # fallback (umbim subscriber), at_port may be empty — calling
+        # `at "" ...` produces a garbled tom_modem invocation. For MBIM the
+        # radio is brought up by `umbim radio on` in mbim_dial() anyway.
+        if [ -n "$at_port" ] && [ -e "$at_port" ]; then
+            at "$at_port" "AT+CFUN=1"
+        fi
         return 1
     else
         return 0
