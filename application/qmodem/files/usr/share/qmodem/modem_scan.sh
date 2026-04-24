@@ -534,12 +534,14 @@ EOF
         uci -q add_list qmodem.$section_name.valid_at_ports="/dev/$at_port"
         uci -q set qmodem.$section_name.at_port="/dev/$at_port"
     done
-    # L850-GL (Intel XMM, 8087:095a): ttyACM2 is the SMS/voice AT port
-    # Without sms_at_port set, send_sms uses the data AT port (ttyACM0)
-    # which does not support SMS PDU commands on this modem
+    # L850-GL (Intel XMM): ttyACM2 is the SMS/voice AT port in both USB modes
+    # (8087:095a NCM and 2cb7:0007 MBIM). Without sms_at_port set, send_sms
+    # uses the data AT port (ttyACM0) which does not support SMS PDU commands
+    # on this modem.
     product_id_check=$(cat "$modem_path/idProduct" 2>/dev/null)
     vendor_id_check=$(cat "$modem_path/idVendor" 2>/dev/null)
-    if [ "$vendor_id_check" = "8087" ] && [ "$product_id_check" = "095a" ]; then
+    if { [ "$vendor_id_check" = "8087" ] && [ "$product_id_check" = "095a" ]; } || \
+       { [ "$vendor_id_check" = "2cb7" ] && [ "$product_id_check" = "0007" ]; }; then
         if [ -e "/dev/ttyACM2" ]; then
             uci -q set qmodem.$section_name.sms_at_port="/dev/ttyACM2"
             m_debug "L850-GL: set sms_at_port to /dev/ttyACM2"

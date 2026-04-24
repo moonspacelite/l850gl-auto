@@ -212,14 +212,43 @@ check_dial_prepare()
     fi
 }
 
-# L850-GL: check IP via AT+CGPADDR (Intel XMM platform)
+# Resolve the MBIM control device (/dev/cdc-wdmX) for the current netcard.
+# cdc_mbim exposes the control node as a usbmisc sibling of the netdev.
+get_mbim_port()
+{
+    [ -z "$modem_netcard" ] && return 1
+    local wdm
+    wdm=$(ls "/sys/class/net/$modem_netcard/device/usbmisc/" 2>/dev/null | head -1)
+    [ -z "$wdm" ] && return 1
+    echo "/dev/$wdm"
+}
+
+# L850-GL: check IP via AT+CGPADDR (NCM) or umbim config (MBIM)
 check_ip()
 {
-    local resp=$(at "$at_port" "AT+CGPADDR=$pdp_index" 2>/dev/null | grep "+CGPADDR:")
-    ipv4=$(echo "$resp" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | grep -v "^0\\.0\\.0\\.0$" | head -1)
-    ipv6=$(echo "$resp" | grep -oE "\\b([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\\b" | head -1)
-    ipv4=$(echo "$ipv4" | tr -d " \n\r\t")
-    ipv6=$(echo "$ipv6" | tr -d " \n\r\t")
+    ipv4=""
+    ipv6=""
+    if [ "$driver" = "mbim" ]; then
+        local mbim_port
+        mbim_port=$(get_mbim_port)
+        if [ -z "$mbim_port" ]; then
+            connection_status="-1"
+            m_debug "check_ip: no mbim control device for $modem_netcard"
+            return
+        fi
+        local config
+        config=$(umbim -n -d "$mbim_port" config 2>/dev/null)
+        ipv4=$(echo "$config" | awk '/ipv4address:/ {print $2}' | cut -d'/' -f1 | head -1)
+        ipv6=$(echo "$config" | awk '/ipv6address:/ {print $2}' | cut -d'/' -f1 | head -1)
+        ipv4=$(echo "$ipv4" | grep -v "^0\\.0\\.0\\.0$" | tr -d " \n\r\t")
+        ipv6=$(echo "$ipv6" | tr -d " \n\r\t")
+    else
+        local resp=$(at "$at_port" "AT+CGPADDR=$pdp_index" 2>/dev/null | grep "+CGPADDR:")
+        ipv4=$(echo "$resp" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | grep -v "^0\\.0\\.0\\.0$" | head -1)
+        ipv6=$(echo "$resp" | grep -oE "\\b([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\\b" | head -1)
+        ipv4=$(echo "$ipv4" | tr -d " \n\r\t")
+        ipv6=$(echo "$ipv6" | tr -d " \n\r\t")
+    fi
 
     connection_status=0
     [ -n "$ipv4" ] && connection_status=1
@@ -462,11 +491,27 @@ ecm_hang()
     at "${at_port}" "AT+CGDATA=0"
 }
 
+mbim_hang()
+{
+    m_debug "mbim_hang"
+    local mbim_port
+    mbim_port=$(get_mbim_port)
+    if [ -n "$mbim_port" ]; then
+        umbim -n -d "$mbim_port" disconnect 2>/dev/null
+    else
+        m_debug "mbim_hang: no mbim control device, falling back to AT"
+        at "${at_port}" "AT+CGACT=0,$pdp_index" 2>/dev/null
+    fi
+}
+
 hang()
 {
     m_debug "hang up $modem_path driver $driver"
     case $driver in
-        "ncm"|"mbim")
+        "mbim")
+            mbim_hang
+            ;;
+        "ncm")
             ecm_hang
             ;;
         *)
@@ -476,9 +521,56 @@ hang()
     flush_if
 }
 
+# L850-GL MBIM dial (AT+GTUSBMODE=7) — use umbim over /dev/cdc-wdmX
+mbim_dial()
+{
+    local mbim_port
+    mbim_port=$(get_mbim_port)
+    if [ -z "$mbim_port" ]; then
+        m_debug "mbim_dial: no mbim control device for $modem_netcard"
+        return 1
+    fi
+
+    [ -z "$apn" ] && apn="auto"
+    [ -z "$pdp_type" ] && pdp_type="IP"
+    pdp_type=$(echo $pdp_type | tr 'a-z' 'A-Z')
+
+    # MBIM pin auth type is decimal: 0=none, 1=pap, 2=chap, 3=mschapv2
+    local mbim_auth="none"
+    case $(echo "$auth" | tr 'A-Z' 'a-z') in
+        "pap")  mbim_auth="pap" ;;
+        "chap") mbim_auth="chap" ;;
+        "mschapv2"|"ms-chap-v2") mbim_auth="mschapv2" ;;
+    esac
+
+    m_debug "dialing(mbim): mbim_port:$mbim_port apn:$apn auth:$mbim_auth pdp_type:$pdp_type pdp_index:$pdp_index"
+
+    # Bring the MBIM link up in order: radio -> attach -> connect.
+    # Mirrors OpenWrt's proto-mbim handler and is what the L850-GL expects.
+    umbim -n -t 15 -d "$mbim_port" radio on >/dev/null 2>&1
+    umbim -n -t 15 -d "$mbim_port" attach >/dev/null 2>&1
+
+    # Drop any previous session before connecting again so we get a fresh IP.
+    umbim -n -t 15 -d "$mbim_port" disconnect >/dev/null 2>&1
+    sleep 1
+
+    # umbim connect: <apn> [pin-type] [username] [password]
+    if [ -n "$username" ] && [ -n "$password" ] && [ "$mbim_auth" != "none" ]; then
+        umbim -n -t 30 -d "$mbim_port" connect "$apn" "$mbim_auth" "$username" "$password"
+    else
+        umbim -n -t 30 -d "$mbim_port" connect "$apn" none "" ""
+    fi
+}
+
 # L850-GL AT dial (Intel XMM platform, NCM + MBIM)
 at_dial()
 {
+    # Dispatch to driver-specific dial implementation first
+    if [ "$driver" = "mbim" ]; then
+        mbim_dial
+        return
+    fi
+
     if [ -z "$pdp_type" ];then
         pdp_type="IP"
     fi
@@ -526,49 +618,205 @@ at_auto_dial()
     return 1
 }
 
-# Set IP config for L850-GL (Intel XMM NCM)
-# Root cause of 2-hour freeze: operator XL reassigns IP every ~2 hours.
-# The old implementation called ifdown + ifup which blocks indefinitely on
-# proto=static interfaces when netifd is slow — script hangs inside ifup,
-# never returns to at_dial_monitor loop, internet stays dead until manual redial.
-#
-# Fix: bypass ifdown/ifup entirely. Apply the new IP directly via iproute2
-# (ip addr, ip route) and update /etc/resolv.conf for DNS — no blocking calls.
-# uci is still updated so the config stays persistent across reboots.
-ip_change_intel()
+# Parse a dotted-quad IPv4 out of arbitrary input (excluding 0.0.0.0).
+_parse_ipv4()
 {
-    m_debug "ip_change_intel"
+    echo "$1" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | grep -v "^0\\.0\\.0\\.0$" | head -1 | tr -d " \n\r\t"
+}
+
+# Convert a dotted-quad subnet mask to a CIDR prefix length.
+_mask_to_prefix()
+{
+    local mask="$1"
+    [ -z "$mask" ] && { echo 24; return; }
+    local prefix=0 octet
+    for octet in $(echo "$mask" | tr '.' ' '); do
+        case "$octet" in
+            255) prefix=$((prefix+8)) ;;
+            254) prefix=$((prefix+7)); break ;;
+            252) prefix=$((prefix+6)); break ;;
+            248) prefix=$((prefix+5)); break ;;
+            240) prefix=$((prefix+4)); break ;;
+            224) prefix=$((prefix+3)); break ;;
+            192) prefix=$((prefix+2)); break ;;
+            128) prefix=$((prefix+1)); break ;;
+            0)   break ;;
+        esac
+    done
+    echo "$prefix"
+}
+
+# Query live PDP parameters from the modem.
+# Prefers AT+CGCONTRDP (3GPP standard, gives gateway + netmask from the network),
+# falls back to AT+CGPADDR + AT+XDNS? when CGCONTRDP is not supported or empty.
+# Populates: ipv4_config, gateway, netmask, prefix, ipv4_dns1, ipv4_dns2
+get_ncm_ip_info()
+{
     local public_dns1_ipv4="8.8.8.8"
     local public_dns2_ipv4="8.8.4.4"
-    local netmask="255.255.255.0"
-    local prefix="24"
 
-    # Ambil IPv4 dari CGPADDR — gunakan grep -oE agar konsisten dengan check_ip
-    local paddr=$(at ${at_port} "AT+CGPADDR=$pdp_index" | grep "+CGPADDR:")
-    ipv4_config=$(echo "$paddr" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | grep -v "^0\\.0\\.0\\.0$" | head -1)
-    ipv4_config=$(echo "$ipv4_config" | tr -d " \n\r\t")
+    ipv4_config=""
+    gateway=""
+    netmask=""
+    prefix=""
+    ipv4_dns1=""
+    ipv4_dns2=""
 
-    # Guard: jika tidak ada IP valid, skip
+    # AT+CGCONTRDP=<cid>
+    # Response: +CGCONTRDP: <cid>,<bearer_id>,<apn>,<local_addr and subnet mask>,
+    #                     <gw_addr>,<DNS_prim>,<DNS_sec>,...
+    # On XMM the <local_addr and subnet mask> comes back as 8 dotted octets:
+    # "a.b.c.d.m.m.m.m". We split it into IP + netmask.
+    local rdp=$(at "$at_port" "AT+CGCONTRDP=$pdp_index" 2>/dev/null | grep "+CGCONTRDP:" | head -1)
+    if [ -n "$rdp" ]; then
+        # Strip header and quotes, split by comma
+        local payload=$(echo "$rdp" | sed 's/^.*+CGCONTRDP:[[:space:]]*//' | tr -d '"')
+        local addr_mask=$(echo "$payload" | awk -F',' '{print $4}')
+        local gw_field=$(echo "$payload" | awk -F',' '{print $5}')
+        local dns1_field=$(echo "$payload" | awk -F',' '{print $6}')
+        local dns2_field=$(echo "$payload" | awk -F',' '{print $7}')
+
+        local octets=$(echo "$addr_mask" | tr -cd '0-9.' )
+        local dot_count=$(echo "$octets" | awk -F'.' '{print NF-1}')
+        if [ "$dot_count" -ge 7 ]; then
+            ipv4_config=$(echo "$octets" | cut -d'.' -f1-4)
+            netmask=$(echo "$octets" | cut -d'.' -f5-8)
+        else
+            ipv4_config=$(_parse_ipv4 "$addr_mask")
+        fi
+        gateway=$(_parse_ipv4 "$gw_field")
+        ipv4_dns1=$(_parse_ipv4 "$dns1_field")
+        ipv4_dns2=$(_parse_ipv4 "$dns2_field")
+    fi
+
+    # Fallback 1: AT+CGPADDR (IP only, no gateway)
+    if [ -z "$ipv4_config" ]; then
+        local paddr=$(at "$at_port" "AT+CGPADDR=$pdp_index" 2>/dev/null | grep "+CGPADDR:")
+        ipv4_config=$(_parse_ipv4 "$paddr")
+    fi
+
+    # Fallback 2: AT+XDNS? for DNS when CGCONTRDP didn't give us DNS
+    if [ -z "$ipv4_dns1" ] || [ -z "$ipv4_dns2" ]; then
+        local xdns=$(at "$at_port" "AT+XDNS?" 2>/dev/null | grep "+XDNS: $pdp_index," | head -1)
+        [ -z "$ipv4_dns1" ] && ipv4_dns1=$(echo "$xdns" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | head -1 | tr -d " \n\r\t")
+        [ -z "$ipv4_dns2" ] && ipv4_dns2=$(echo "$xdns" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | tail -1 | tr -d " \n\r\t")
+    fi
+
+    # Final defaults
+    [ -z "$netmask" ] && netmask="255.255.255.0"
+    prefix=$(_mask_to_prefix "$netmask")
+    [ -z "$prefix" ] || [ "$prefix" = "0" ] && prefix="24"
+
+    # Infer gateway when the network didn't tell us one. For point-to-point
+    # raw_ip NCM the gateway is a formality; picking .1 in the same /24 matches
+    # the convention used by upstream QModem (ip_change_fm350).
+    if [ -z "$gateway" ] && [ -n "$ipv4_config" ]; then
+        gateway="${ipv4_config%.*}.1"
+    fi
+
+    [ -z "$ipv4_dns1" ] || [ "$ipv4_dns1" = "0.0.0.0" ] && ipv4_dns1="$public_dns1_ipv4"
+    [ -z "$ipv4_dns2" ] || [ "$ipv4_dns2" = "0.0.0.0" ] && ipv4_dns2="$public_dns2_ipv4"
+}
+
+# Query live PDP parameters from the modem via umbim (MBIM mode).
+get_mbim_ip_info()
+{
+    local public_dns1_ipv4="8.8.8.8"
+    local public_dns2_ipv4="8.8.4.4"
+
+    ipv4_config=""
+    gateway=""
+    netmask=""
+    prefix=""
+    ipv4_dns1=""
+    ipv4_dns2=""
+
+    local mbim_port
+    mbim_port=$(get_mbim_port)
+    [ -z "$mbim_port" ] && return
+
+    local config
+    config=$(umbim -n -d "$mbim_port" config 2>/dev/null)
+    local addr_cidr
+    addr_cidr=$(echo "$config" | awk '/ipv4address:/ {print $2}' | head -1)
+    ipv4_config=$(echo "$addr_cidr" | cut -d'/' -f1)
+    prefix=$(echo "$addr_cidr" | grep -oE '/[0-9]+$' | tr -d '/')
+    gateway=$(echo "$config" | awk '/ipv4gateway:/ {print $2}' | head -1)
+    ipv4_dns1=$(echo "$config" | awk '/ipv4dns:|ipv4dnsserver:/ {print $2}' | sed -n '1p')
+    ipv4_dns2=$(echo "$config" | awk '/ipv4dns:|ipv4dnsserver:/ {print $2}' | sed -n '2p')
+
+    [ -z "$prefix" ] || [ "$prefix" = "0" ] && prefix="24"
+    [ -z "$gateway" ] && [ -n "$ipv4_config" ] && gateway="${ipv4_config%.*}.1"
+    [ -z "$ipv4_dns1" ] && ipv4_dns1="$public_dns1_ipv4"
+    [ -z "$ipv4_dns2" ] && ipv4_dns2="$public_dns2_ipv4"
+
+    # Derive a netmask string from the prefix for UCI storage
+    case "$prefix" in
+        32) netmask="255.255.255.255" ;;
+        30) netmask="255.255.255.252" ;;
+        29) netmask="255.255.255.248" ;;
+        28) netmask="255.255.255.240" ;;
+        27) netmask="255.255.255.224" ;;
+        26) netmask="255.255.255.192" ;;
+        25) netmask="255.255.255.128" ;;
+        24) netmask="255.255.255.0"   ;;
+        16) netmask="255.255.0.0"     ;;
+        8)  netmask="255.0.0.0"       ;;
+        *)  netmask="255.255.255.0"   ;;
+    esac
+}
+
+# Apply a freshly assigned IP to the NCM/MBIM netdev without blocking on
+# ifdown/ifup.
+#
+# Why we bypass netifd:
+# Operator (e.g. XL) reassigns IP every ~2 hours. The legacy implementation
+# called ifdown + ifup which blocks indefinitely on proto=static interfaces
+# when netifd is slow — the dial script hangs inside ifup, never returns to
+# at_dial_monitor, internet stays dead until manual redial.
+#
+# Why this was still broken before this commit (NCM IP "bengong"):
+# 1. `gateway = last_octet + 1` is not the carrier's real gateway. On point-
+#    to-point raw_ip NCM this usually still works, but it is fragile.
+# 2. No conntrack flush after the address swap. Every pre-existing NAT
+#    session in /proc/net/nf_conntrack is still keyed on the OLD source IP,
+#    so any active TCP connection keeps sending packets that the kernel
+#    happily SNATs to a now-unbound address → packets are silently dropped
+#    upstream. Apps hang until their own TCP timeout fires (minutes).
+#    That is the "IP sudah refresh tapi internet tidak jalan" symptom.
+# 3. netifd's cached status stays on the old IP. Services querying
+#    `network.interface.<name>` via ubus (firewall, ddns, mwan, dnsmasq)
+#    reload against stale data.
+#
+# What this function now does:
+# - Prefer AT+CGCONTRDP (or umbim config for MBIM) to get the correct gateway,
+#   netmask and DNS straight from the carrier. Fall back to AT+CGPADDR +
+#   AT+XDNS? when unavailable.
+# - Persist the new values in UCI so they survive reboot.
+# - Apply them directly via iproute2 (non-blocking).
+# - Flush conntrack so stuck NAT sessions tied to the old source IP die
+#   immediately and apps reconnect.
+# - Tell netifd the link came back via `ubus call network reload` so
+#   dependent services re-evaluate without going through a full ifdown/ifup.
+ip_change_intel()
+{
+    m_debug "ip_change_intel driver=$driver"
+
+    if [ "$driver" = "mbim" ]; then
+        get_mbim_ip_info
+    else
+        get_ncm_ip_info
+    fi
+
     if [ -z "$ipv4_config" ] || [ "$ipv4_config" = "0.0.0.0" ]; then
-        m_debug "ip_change_intel: no valid IP from CGPADDR, skipping"
+        m_debug "ip_change_intel: no valid IP, skipping"
         return
     fi
 
-    local last_octet="${ipv4_config##*.}"
-    gateway="${ipv4_config%.*}.$((last_octet+1))"
+    # Remember the previous IP so we can flush its stuck NAT sessions.
+    local old_ipv4=$(uci -q get network.${interface_name}.ipaddr)
 
-    local xdns=$(at ${at_port} "AT+XDNS?" | grep "+XDNS: $pdp_index," | head -1)
-    ipv4_dns1=$(echo "$xdns" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | head -1 | tr -d " \n\r\t")
-    ipv4_dns2=$(echo "$xdns" | grep -oE "\\b([0-9]{1,3}\\.){3}[0-9]{1,3}\\b" | tail -1 | tr -d " \n\r\t")
-
-    if [ -z "$ipv4_dns1" ] || [ "$ipv4_dns1" = "0.0.0.0" ]; then
-        ipv4_dns1="$public_dns1_ipv4"
-    fi
-    if [ -z "$ipv4_dns2" ] || [ "$ipv4_dns2" = "0.0.0.0" ]; then
-        ipv4_dns2="$public_dns2_ipv4"
-    fi
-
-    # Update UCI agar config bertahan setelah reboot (tanpa ifup — menghindari blocking hang)
+    # Update UCI so the config survives reboot (tanpa ifup — menghindari blocking hang)
     uci set network.${interface_name}.proto='static'
     uci set network.${interface_name}.ipaddr="${ipv4_config}"
     uci set network.${interface_name}.netmask="${netmask}"
@@ -580,28 +828,58 @@ ip_change_intel()
     uci add_list network.${interface_name}.dns="${ipv4_dns2}"
     uci commit network
 
-    # Apply IP langsung via iproute2 — non-blocking, tanpa ifdown/ifup
+    # Apply the IP directly via iproute2 — non-blocking.
     ip link set "${modem_netcard}" up
-    ip link set "${modem_netcard}" arp off
-    ip addr flush dev "${modem_netcard}"
-    ip route del default dev "${modem_netcard}" 2>/dev/null || true
+    # cdc_ncm/cdc_mbim expose raw_ip mode; ARP is meaningless on point-to-point.
+    [ "$driver" != "ecm" ] && ip link set "${modem_netcard}" arp off 2>/dev/null
+    ip addr flush dev "${modem_netcard}" 2>/dev/null
+    ip route del default dev "${modem_netcard}" 2>/dev/null
     ip addr add "${ipv4_config}/${prefix}" dev "${modem_netcard}"
-    ip route add default via "${gateway}" dev "${modem_netcard}" metric "${metric:-11}"
+    # Use an on-link default route for raw_ip — the gateway field is largely
+    # cosmetic on point-to-point but keep it so userspace tools show sane state.
+    ip route add default via "${gateway}" dev "${modem_netcard}" metric "${metric:-11}" 2>/dev/null || \
+        ip route add default dev "${modem_netcard}" metric "${metric:-11}" 2>/dev/null
 
-    # Update DNS langsung tanpa netifd
-    {
-        echo "nameserver ${ipv4_dns1}"
-        echo "nameserver ${ipv4_dns2}"
-    } > /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null || {
-        echo "nameserver ${ipv4_dns1}" > /tmp/resolv.conf
-        echo "nameserver ${ipv4_dns2}" >> /tmp/resolv.conf
-    }
+    # Update DNS for the WAN path. resolv.conf.d/ is what OpenWrt's resolv.conf
+    # symlink points to; fall back to /tmp/resolv.conf when the dir is absent
+    # (some minimal images).
+    if [ -d /tmp/resolv.conf.d ]; then
+        {
+            echo "# generated by qmodem (${interface_name})"
+            echo "nameserver ${ipv4_dns1}"
+            echo "nameserver ${ipv4_dns2}"
+        } > /tmp/resolv.conf.d/resolv.conf.auto
+    else
+        {
+            echo "nameserver ${ipv4_dns1}"
+            echo "nameserver ${ipv4_dns2}"
+        } > /tmp/resolv.conf
+    fi
 
-    # Restart odhcp6c untuk interface v6 (non-blocking)
-    # Sebelumnya tidak pernah dijalankan karena ifup pada parent hang
-    ifup "${interface6_name}" &
+    # BUG FIX (NCM auto-refresh): flush stale NAT sessions tied to the old IP.
+    # Without this, existing TCP flows keep SNAT-ing to the old source address
+    # that no longer exists on the interface, and apps hang for minutes.
+    if command -v conntrack >/dev/null 2>&1; then
+        if [ -n "$old_ipv4" ] && [ "$old_ipv4" != "$ipv4_config" ]; then
+            conntrack -D -s "$old_ipv4" 2>/dev/null
+            conntrack -D -d "$old_ipv4" 2>/dev/null
+        fi
+        # Also flush anything bound to this netdev as a safety net.
+        conntrack -D --orig-zone 0 2>/dev/null | grep -q "$modem_netcard" && true
+    else
+        # Kernel-level fallback: write to /proc to flush NAT tables.
+        [ -w /proc/net/nf_conntrack ] && echo f > /proc/sys/net/netfilter/nf_conntrack_flush 2>/dev/null || true
+    fi
 
-    m_debug "ip_change_intel: set $interface_name to $ipv4_config gw=$gateway dns=$ipv4_dns1,$ipv4_dns2"
+    # Nudge netifd so subscribers (firewall, dnsmasq, ddns, mwan) re-read the
+    # current interface state. This is much lighter than ifdown/ifup and will
+    # not block on slow netifd.
+    ubus call network reload 2>/dev/null &
+
+    # Refresh IPv6 side (odhcp6c) without blocking the monitor loop.
+    ifup "${interface6_name}" >/dev/null 2>&1 &
+
+    m_debug "ip_change_intel: ${interface_name} -> ${ipv4_config}/${prefix} gw=${gateway} dns=${ipv4_dns1},${ipv4_dns2} (was ${old_ipv4:-none})"
 }
 
 handle_ip_change()
