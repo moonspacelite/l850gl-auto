@@ -915,16 +915,25 @@ check_logfile_line()
 
 do_redial()
 {
-    # Bug #1 fix: always disconnect cleanly before redialing on L850GL (Intel XMM).
-    # AT+XDATACHANNEL=0 + AT+CGDATA=0 must be sent before AT+CGDATA="M-RAW_IP",
-    # otherwise modem returns ERROR (data channel still considered active) and hangs.
-    m_debug "do_redial: disconnecting before redial"
-    at "${at_port}" "AT+XDATACHANNEL=0" 2>/dev/null
-    at "${at_port}" "AT+CGDATA=0" 2>/dev/null
-    # Bug #3 fix: give modem time to fully release the data channel before reconnecting
+    # Always tear down the existing data session cleanly before redialing so
+    # the modem doesn't reject the reconnect with ERROR / silently hang.
+    #
+    # Backend matters here:
+    #   NCM:  AT+XDATACHANNEL=0 + AT+CGDATA=0  (Intel XMM data channel)
+    #   MBIM: umbim disconnect                  (PDP context lives in MBIM layer)
+    # Sending the NCM AT commands in MBIM mode is at best wasteful and on some
+    # XMM firmware can confuse the MBIM-managed PDP context.
+    m_debug "do_redial: disconnecting before redial (driver=$driver)"
+    if [ "$driver" = "mbim" ]; then
+        mbim_hang
+    else
+        at "${at_port}" "AT+XDATACHANNEL=0" 2>/dev/null
+        at "${at_port}" "AT+CGDATA=0" 2>/dev/null
+    fi
+    # Give modem time to fully release the data channel before reconnecting
     sleep 5
     at_dial
-    # Bug #3 fix: wait for modem to assign IP before next check_ip poll
+    # Wait for modem to assign IP before next check_ip poll
     sleep 20
 }
 
