@@ -16,6 +16,22 @@
                     "ncm",
                     "mbim"
                 ]
+            },
+            "l850-gl-mbim": {
+                "id": "2cb7:0007",
+                "manufacturer_id": "2cb7",
+                "manufacturer": "fibocom",
+                "platform": "intel",
+                "data_interface": "usb",
+                "pdp_index": "0",
+                "wcdma_band": "1/2/4/5/8",
+                "lte_band": "1/2/3/4/5/7/8/12/13/17/18/19/20/25/26/28/66",
+                "nsa_band": "0",
+                "sa_band": "0",
+                "modes": [
+                    "mbim",
+                    "ncm"
+                ]
             }
         },
         "pcie": {},
@@ -23,10 +39,12 @@
             "fibocom": {
                 "intel": {
                     "vendor_id": [
-                        "8087"
+                        "8087",
+                        "2cb7"
                     ],
                     "product_id": [
-                        "095a"
+                        "095a",
+                        "0007"
                     ]
                 }
             }
