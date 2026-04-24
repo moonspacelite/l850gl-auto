@@ -237,7 +237,9 @@ check_ip()
             return
         fi
         local config
-        config=$(umbim -n -d "$mbim_port" config 2>/dev/null)
+        # -t 10: bail out if the modem's MBIM control port stops responding
+        # so the monitor loop doesn't wedge indefinitely on a dead modem.
+        config=$(umbim -n -t 10 -d "$mbim_port" config 2>/dev/null)
         ipv4=$(echo "$config" | awk '/ipv4address:/ {print $2}' | cut -d'/' -f1 | head -1)
         ipv6=$(echo "$config" | awk '/ipv6address:/ {print $2}' | cut -d'/' -f1 | head -1)
         ipv4=$(echo "$ipv4" | grep -v "^0\\.0\\.0\\.0$" | tr -d " \n\r\t")
@@ -497,10 +499,13 @@ mbim_hang()
     local mbim_port
     mbim_port=$(get_mbim_port)
     if [ -n "$mbim_port" ]; then
-        umbim -n -d "$mbim_port" disconnect 2>/dev/null
+        umbim -n -t 15 -d "$mbim_port" disconnect 2>/dev/null
     else
-        m_debug "mbim_hang: no mbim control device, falling back to AT"
-        at "${at_port}" "AT+CGACT=0,$pdp_index" 2>/dev/null
+        # No /dev/cdc-wdmX means the MBIM interface is gone (device unplug
+        # or kernel driver crash). There is nothing to disconnect from AT
+        # side for MBIM — AT+CGACT is not how MBIM PDP contexts are torn
+        # down on XMM firmware. Just log and let the caller retry.
+        m_debug "mbim_hang: no mbim control device; skipping"
     fi
 }
 
@@ -736,7 +741,8 @@ get_mbim_ip_info()
     [ -z "$mbim_port" ] && return
 
     local config
-    config=$(umbim -n -d "$mbim_port" config 2>/dev/null)
+    # -t 10: same rationale as check_ip — don't let a stuck modem block us.
+    config=$(umbim -n -t 10 -d "$mbim_port" config 2>/dev/null)
     local addr_cidr
     addr_cidr=$(echo "$config" | awk '/ipv4address:/ {print $2}' | head -1)
     ipv4_config=$(echo "$addr_cidr" | cut -d'/' -f1)
